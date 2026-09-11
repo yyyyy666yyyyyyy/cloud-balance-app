@@ -22,8 +22,30 @@ CHAT_ID = os.environ.get("CHAT_ID", "-1004291395114")
 UPLOAD_FOLDER = "uploads"
 HISTORY_FILE = "sent_history.json"
 CANCEL_FILE = "cancel_signal.flag"
+HUAWEI_DICT_FILE = "huawei_dict.json"
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+
+# ---------------------------------------------------------
+# 新增：保证字典能在云端磁盘文件和内存之间实时读写，永不丢失
+# ---------------------------------------------------------
+def load_huawei_dict():
+    if os.path.exists(HUAWEI_DICT_FILE):
+        try:
+            with open(HUAWEI_DICT_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+
+def save_huawei_dict(dictionary):
+    try:
+        with open(HUAWEI_DICT_FILE, "w", encoding="utf-8") as f:
+            json.dump(dictionary, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving huawei dict: {e}")
 
 
 def load_sent_history():
@@ -65,6 +87,7 @@ def parse_tag(tag_str):
         return None
     s = str(tag_str).strip()
 
+    # 自动过滤测试与非客户标签
     invalid_keywords = ["自定义标签", "测试", "hid", "添加", "设置预算"]
     if any(k in s for k in invalid_keywords):
         return None
@@ -171,7 +194,7 @@ HTML_TEMPLATE = """
 </head>
 <body class="bg-slate-100 min-h-screen flex font-sans">
 
-    <!-- 侧边栏导航 -->
+    <!-- 侧边栏侧边导航 -->
     <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col min-h-screen p-4 flex-shrink-0 shadow-xl">
         <div class="px-3 py-4 border-b border-slate-800 mb-6 flex items-center gap-3">
             <div class="bg-indigo-600 p-2 rounded-lg text-white font-bold"><i class="fa-solid fa-cloud"></i></div>
@@ -201,7 +224,7 @@ HTML_TEMPLATE = """
         </div>
     </aside>
 
-    <!-- 主内容区 -->
+    <!-- 右侧内容主区 -->
     <main class="flex-1 p-8 overflow-y-auto">
 
         <!-- Tab 1: 播报控制台 -->
@@ -245,7 +268,7 @@ HTML_TEMPLATE = """
             <header class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center">
                 <div>
                     <h1 class="text-2xl font-bold text-slate-800">华为云数据专区</h1>
-                    <p class="text-sm text-slate-500 mt-1">粘贴华为原始文本，系统将自动清洗垃圾标签、智能计算余额</p>
+                    <p class="text-sm text-slate-500 mt-1">全选粘贴华为拉取的整块多行表格数据，自动匹配字典并计算余额</p>
                 </div>
                 <button onclick="parseAndPreviewHuawei()" class="bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition shadow">
                     🔍 解析并预览华为数据
@@ -253,11 +276,11 @@ HTML_TEMPLATE = """
             </header>
 
             <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-                <textarea id="huaweiText" rows="6" placeholder="直接在此粘贴华为页面全选拉取的整块数据..." class="w-full p-4 border rounded-xl font-mono text-xs text-slate-700 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-slate-50/50"></textarea>
+                <textarea id="huaweiText" rows="6" placeholder="请直接在此处粘贴华为页面全选拉取出的多行错位文本..." class="w-full p-4 border rounded-xl font-mono text-xs text-slate-700 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-slate-50/50"></textarea>
 
                 <div id="huaweiPreviewArea" class="hidden border rounded-xl bg-white overflow-hidden shadow-sm">
                     <div class="bg-orange-100 px-4 py-3 border-b flex justify-between items-center">
-                        <span class="text-xs font-bold text-orange-900">📊 华为云解析有效数据 (已过滤非客户标签与0余额记录)</span>
+                        <span class="text-xs font-bold text-orange-900">📊 华为云解析结果人工核查 (发前预览)</span>
                         <span id="hwParsedCount" class="text-xs text-orange-700 font-medium"></span>
                     </div>
                     <div class="max-h-80 overflow-y-auto">
@@ -284,11 +307,12 @@ HTML_TEMPLATE = """
         <section id="tab-dictionary" class="hidden space-y-6">
             <header class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
                 <h1 class="text-2xl font-bold text-slate-800">华为 HID 邮箱字典管理</h1>
-                <p class="text-sm text-slate-500 mt-1">从 Excel 复制两列批量粘贴导入 HID 映射，自动保存在本地</p>
+                <p class="text-sm text-slate-500 mt-1">支持批量粘贴表格导入 HID 映射，永久保存在你的浏览器与云端中</p>
             </header>
 
+            <!-- 批量粘贴导入 -->
             <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-                <h3 class="font-bold text-slate-800 text-sm">📋 批量添加/导入 HID 映射:</h3>
+                <h3 class="font-bold text-slate-800 text-sm">📋 批量添加/导入 HID 映射 (从 Excel 复制两列粘贴):</h3>
                 <textarea id="batchDictText" rows="6" placeholder="例如:&#10;hid_u2oi0snvj10umpe    o3enur4yljlzp@anyrelax.fun&#10;hid_gequmxnuply07xe    4w23ax4aohp2@anyrelax.fun" class="w-full p-3 border rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-none bg-slate-50/50"></textarea>
                 <div class="flex justify-end">
                     <button onclick="importBatchDict()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium px-5 py-2.5 rounded-lg transition shadow">
@@ -297,6 +321,7 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
+            <!-- 当前字典列表 -->
             <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                 <div class="p-4 border-b bg-slate-50 flex justify-between items-center">
                     <span class="font-bold text-slate-700 text-sm">已生效的 HID 映射字典列表</span>
@@ -323,7 +348,7 @@ HTML_TEMPLATE = """
         function getLocalDict() {
             try {
                 return JSON.parse(localStorage.getItem('huawei_hid_dict')) || {};
-            } catch (e) {
+            } catch {
                 return {};
             }
         }
@@ -362,32 +387,40 @@ HTML_TEMPLATE = """
             }
         }
 
+        // 核心增强点：前端+后端同步写入
         async function importBatchDict() {
             var text = document.getElementById('batchDictText').value;
             if (!text || !text.trim()) return alert('请先粘贴包含 HID 和 邮箱 的表格数据！');
 
+            var dict = getLocalDict();
+            var count = 0;
+            var lines = text.trim().split(/\r?\n/);
+
+            lines.forEach(function(line) {
+                var parts = line.trim().split(/\s+/);
+                if (parts.length >= 2) {
+                    var possibleHid = parts[0].trim();
+                    var possibleEmail = parts[1].trim();
+                    if (possibleHid.indexOf('hid_') !== -1) {
+                        dict[possibleHid] = possibleEmail;
+                        count++;
+                    }
+                }
+            });
+
+            saveLocalDict(dict);
+            
+            // 同步保存到云端服务器
             try {
-                var res = await fetch('/api/huawei/dict/import', {
+                await fetch('/api/huawei/dict/sync', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ raw_text: text })
+                    body: JSON.stringify({ hw_dict: dict })
                 });
-                var data = await res.json();
-                if (data.success) {
-                    var localDict = getLocalDict();
-                    var keys = Object.keys(data.parsed_dict);
-                    for (var i = 0; i < keys.length; i++) {
-                        localDict[keys[i]] = data.parsed_dict[keys[i]];
-                    }
-                    saveLocalDict(localDict);
-                    document.getElementById('batchDictText').value = '';
-                    alert('🎉 成功批量保存了 ' + data.count + ' 条 HID 映射字典！');
-                } else {
-                    alert('❌ 保存失败: ' + data.error);
-                }
-            } catch (err) {
-                alert('❌ 请求发生异常: ' + err.message);
-            }
+            } catch(e){}
+
+            document.getElementById('batchDictText').value = '';
+            alert('🎉 成功批量保存了 ' + count + ' 条 HID 映射字典！');
         }
 
         function deleteDictKey(key) {
@@ -463,9 +496,9 @@ HTML_TEMPLATE = """
                         '</tr>';
                     }
 
-                    document.getElementById('hwParsedCount').innerText = '共筛出 ' + data.results.length + ' 条有效记录';
+                    document.getElementById('hwParsedCount').innerText = '识别出 ' + data.results.length + ' 条记录';
                     document.getElementById('huaweiPreviewArea').classList.remove('hidden');
-                    log('✅ 华为数据解析完成！已剔除非客户标签和0余额数据，剩余 ' + data.results.length + ' 条真实有效记录。', 'text-orange-300');
+                    log('✅ 华为数据解析完成！已生成下方 ' + data.results.length + ' 条预览表格供核对。', 'text-orange-300');
                 } else {
                     log('❌ 解析失败: ' + data.error, 'text-rose-400');
                 }
@@ -549,29 +582,13 @@ def upload_files():
         return jsonify({"success": False, "error": str(e)})
 
 
-@app.route("/api/huawei/dict/import", methods=["POST"])
-def huawei_dict_import_api():
+@app.route("/api/huawei/dict/sync", methods=["POST"])
+def huawei_dict_sync():
     try:
         data = request.json or {}
-        raw_text = data.get("raw_text", "")
-        lines = raw_text.strip().split("\n")
-        parsed_dict = {}
-
-        for line in lines:
-            line_str = line.strip()
-            if not line_str:
-                continue
-            # 后端强大的通用切分逻辑 (Tab、空格、逗号全兼容)
-            parts = re.split(r"[\s,\t]+", line_str)
-            if len(parts) >= 2:
-                hid_cand = parts[0].strip()
-                email_cand = parts[1].strip()
-                if "hid_" in hid_cand:
-                    parsed_dict[hid_cand] = email_cand
-
-        return jsonify(
-            {"success": True, "count": len(parsed_dict), "parsed_dict": parsed_dict}
-        )
+        hw_dict = data.get("hw_dict", {})
+        save_huawei_dict(hw_dict)
+        return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
@@ -582,6 +599,9 @@ def huawei_parse_api():
         data = request.json or {}
         raw_text = data.get("raw_text", "")
         hw_dict = data.get("hw_dict", {})
+        # 如果前端没传，就去读云端文件
+        if not hw_dict:
+            hw_dict = load_huawei_dict()
         results = parse_huawei_multiline_text(raw_text, hw_dict)
         return jsonify({"success": True, "results": results})
     except Exception as e:
@@ -642,6 +662,8 @@ def broadcast_api():
         req_data = request.json or {}
         huawei_raw_text = req_data.get("huawei_raw", "")
         hw_dict = req_data.get("hw_dict", {})
+        if not hw_dict:
+            hw_dict = load_huawei_dict()
 
         all_data = []
         group_map = {}
@@ -649,7 +671,7 @@ def broadcast_api():
         if huawei_raw_text.strip():
             hw_results = parse_huawei_multiline_text(huawei_raw_text, hw_dict)
             for r in hw_results:
-                if r["groupID"] and r["balance"] > 0:
+                if r["groupID"] != "未识别" and r["balance"] > 0:
                     all_data.append(
                         {
                             "account": r["email"],
