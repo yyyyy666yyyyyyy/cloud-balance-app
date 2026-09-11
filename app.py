@@ -149,6 +149,25 @@ HTML_TEMPLATE = """
     <title>多云余额自动化管理控制台</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        function switchTab(tabName) {
+            var tabs = ['dashboard', 'huawei', 'dictionary'];
+            for (var i = 0; i < tabs.length; i++) {
+                var t = tabs[i];
+                var el = document.getElementById('tab-' + t);
+                var btn = document.getElementById('nav-' + t);
+                if (el) el.classList.add('hidden');
+                if (btn) btn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition";
+            }
+
+            var activeEl = document.getElementById('tab-' + tabName);
+            var activeBtn = document.getElementById('nav-' + tabName);
+            if (activeEl) activeEl.classList.remove('hidden');
+            if (activeBtn) activeBtn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-indigo-600 text-white transition";
+
+            if (tabName === 'dictionary') renderDictTable();
+        }
+    </script>
 </head>
 <body class="bg-slate-100 min-h-screen flex font-sans">
 
@@ -314,24 +333,6 @@ HTML_TEMPLATE = """
             renderDictTable();
         }
 
-        function switchTab(tabName) {
-            var tabs = ['dashboard', 'huawei', 'dictionary'];
-            for (var i = 0; i < tabs.length; i++) {
-                var t = tabs[i];
-                var el = document.getElementById('tab-' + t);
-                var btn = document.getElementById('nav-' + t);
-                if (el) el.classList.add('hidden');
-                if (btn) btn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition";
-            }
-
-            var activeEl = document.getElementById('tab-' + tabName);
-            var activeBtn = document.getElementById('nav-' + tabName);
-            if (activeEl) activeEl.classList.remove('hidden');
-            if (activeBtn) activeBtn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-indigo-600 text-white transition";
-
-            if (tabName === 'dictionary') renderDictTable();
-        }
-
         function log(msg, color) {
             color = color || 'text-slate-200';
             var box = document.getElementById('logBox');
@@ -342,6 +343,7 @@ HTML_TEMPLATE = """
         function renderDictTable() {
             var dict = getLocalDict();
             var tbody = document.getElementById('dictTableBody');
+            if (!tbody) return;
             tbody.innerHTML = '';
             var keys = Object.keys(dict);
 
