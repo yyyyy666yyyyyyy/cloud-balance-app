@@ -304,7 +304,7 @@ HTML_TEMPLATE = """
         function getLocalDict() {
             try {
                 return JSON.parse(localStorage.getItem('huawei_hid_dict')) || {};
-            } catch {
+            } catch (e) {
                 return {};
             }
         }
@@ -315,76 +315,80 @@ HTML_TEMPLATE = """
         }
 
         function switchTab(tabName) {
-            ['dashboard', 'huawei', 'dictionary'].forEach(t => {
-                document.getElementById(`tab-${t}`).classList.add('hidden');
-                const btn = document.getElementById(`nav-${t}`);
-                btn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition";
-            });
+            var tabs = ['dashboard', 'huawei', 'dictionary'];
+            for (var i = 0; i < tabs.length; i++) {
+                var t = tabs[i];
+                var el = document.getElementById('tab-' + t);
+                var btn = document.getElementById('nav-' + t);
+                if (el) el.classList.add('hidden');
+                if (btn) btn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition";
+            }
 
-            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
-            const activeBtn = document.getElementById(`nav-${tabName}`);
-            activeBtn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-indigo-600 text-white transition";
+            var activeEl = document.getElementById('tab-' + tabName);
+            var activeBtn = document.getElementById('nav-' + tabName);
+            if (activeEl) activeEl.classList.remove('hidden');
+            if (activeBtn) activeBtn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-indigo-600 text-white transition";
 
             if (tabName === 'dictionary') renderDictTable();
         }
 
-        function log(msg, color='text-slate-200') {
-            const box = document.getElementById('logBox');
-            box.innerHTML += `<p class="${color} mt-1">> ${msg}</p>`;
+        function log(msg, color) {
+            color = color || 'text-slate-200';
+            var box = document.getElementById('logBox');
+            box.innerHTML += '<p class="' + color + ' mt-1">> ' + msg + '</p>';
             box.scrollTop = box.scrollHeight;
         }
 
         function renderDictTable() {
-            const dict = getLocalDict();
-            const tbody = document.getElementById('dictTableBody');
+            var dict = getLocalDict();
+            var tbody = document.getElementById('dictTableBody');
             tbody.innerHTML = '';
-            const keys = Object.keys(dict);
+            var keys = Object.keys(dict);
 
             if (keys.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-slate-400">暂无任何 HID 映射，请在上方粘贴批量导入！</td></tr>`;
+                tbody.innerHTML = '<tr><td colspan="3" class="p-4 text-center text-slate-400">暂无任何 HID 映射，请在上方粘贴批量导入！</td></tr>';
                 return;
             }
 
-            keys.forEach(k => {
-                tbody.innerHTML += `
-                    <tr>
-                        <td class="p-3 font-mono text-slate-600">${k}</td>
-                        <td class="p-3 font-medium text-emerald-700">${dict[k]}</td>
-                        <td class="p-3 text-right">
-                            <button onclick="deleteDictKey('${k}')" class="text-rose-500 hover:text-rose-700"><i class="fa-solid fa-trash"></i></button>
-                        </td>
-                    </tr>
-                `;
-            });
+            for (var i = 0; i < keys.length; i++) {
+                var k = keys[i];
+                tbody.innerHTML += '<tr>' +
+                    '<td class="p-3 font-mono text-slate-600">' + k + '</td>' +
+                    '<td class="p-3 font-medium text-emerald-700">' + dict[k] + '</td>' +
+                    '<td class="p-3 text-right"><button onclick="deleteDictKey(\'' + k + '\')" class="text-rose-500 hover:text-rose-700"><i class="fa-solid fa-trash"></i></button></td>' +
+                '</tr>';
+            }
         }
 
         function importBatchDict() {
-            const text = document.getElementById('batchDictText').value;
+            var text = document.getElementById('batchDictText').value;
             if (!text || !text.trim()) return alert('请先粘贴包含 HID 和 邮箱 的表格数据！');
 
-            const dict = getLocalDict();
-            let count = 0;
-            const lines = text.trim().split(/\r?\n/);
+            var dict = getLocalDict();
+            var count = 0;
+            var lines = text.trim().split('\n');
 
-            lines.forEach(line => {
-                const parts = line.trim().split(/\s+/);
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i].trim();
+                if (!line) continue;
+                var parts = line.split(/\s+/);
                 if (parts.length >= 2) {
-                    const possibleHid = parts[0].trim();
-                    const possibleEmail = parts[1].trim();
-                    if (possibleHid.includes('hid_')) {
+                    var possibleHid = parts[0].trim();
+                    var possibleEmail = parts[1].trim();
+                    if (possibleHid.indexOf('hid_') !== -1) {
                         dict[possibleHid] = possibleEmail;
                         count++;
                     }
                 }
-            });
+            }
 
             saveLocalDict(dict);
             document.getElementById('batchDictText').value = '';
-            alert(`🎉 成功批量保存了 ${count} 条 HID 映射字典！`);
+            alert('🎉 成功批量保存了 ' + count + ' 条 HID 映射字典！');
         }
 
         function deleteDictKey(key) {
-            const dict = getLocalDict();
+            var dict = getLocalDict();
             delete dict[key];
             saveLocalDict(dict);
         }
@@ -397,108 +401,107 @@ HTML_TEMPLATE = """
         }
 
         async function handleFileSelect(event) {
-            const files = event.target.files;
+            var files = event.target.files;
             if (files.length === 0) return;
 
-            document.getElementById('fileCount').innerText = `已选择 ${files.length} 个文件，正在上传...`;
-            const formData = new FormData();
-            for (let i = 0; i < files.length; i++) {
+            document.getElementById('fileCount').innerText = '已选择 ' + files.length + ' 个文件，正在上传...';
+            var formData = new FormData();
+            for (var i = 0; i < files.length; i++) {
                 formData.append('files', files[i]);
             }
 
             try {
-                const res = await fetch('/api/upload', { method: 'POST', body: formData });
-                const data = await res.json();
+                var res = await fetch('/api/upload', { method: 'POST', body: formData });
+                var data = await res.json();
                 if (data.success) {
-                    log(`✅ 成功上传并更新了 ${data.uploaded_count} 个账单文件！`, 'text-emerald-400');
-                    document.getElementById('fileCount').innerText = `已成功接收 ${data.uploaded_count} 个最新数据文件。`;
+                    log('✅ 成功上传并更新了 ' + data.uploaded_count + ' 个账单文件！', 'text-emerald-400');
+                    document.getElementById('fileCount').innerText = '已成功接收 ' + data.uploaded_count + ' 个最新数据文件。';
                 } else {
-                    log(`❌ 上传失败: ${data.error}`, 'text-rose-400');
+                    log('❌ 上传失败: ' + data.error, 'text-rose-400');
                 }
             } catch (err) {
-                log(`❌ 上传异常: ${err.message}`, 'text-rose-400');
+                log('❌ 上传异常: ' + err.message, 'text-rose-400');
             }
         }
 
         async function parseAndPreviewHuawei() {
-            const text = document.getElementById('huaweiText').value;
+            var text = document.getElementById('huaweiText').value;
             if (!text.trim()) {
                 alert('请先在文本框里粘贴华为拉取的数据！');
                 return;
             }
 
-            const localDict = getLocalDict();
+            var localDict = getLocalDict();
 
             try {
-                const res = await fetch('/api/huawei/parse', {
+                var res = await fetch('/api/huawei/parse', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ raw_text: text, hw_dict: localDict })
                 });
-                const data = await res.json();
+                var data = await res.json();
                 if (data.success) {
-                    const tbody = document.getElementById('hwTableBody');
+                    var tbody = document.getElementById('hwTableBody');
                     tbody.innerHTML = '';
-                    data.results.forEach(r => {
-                        const isUnknown = r.email.startsWith ? r.email.startsWith('hid_') : r.email.includes('hid_');
-                        const emailHtml = isUnknown 
-                            ? `<span class="text-rose-600 font-bold">${r.email} (未绑定)</span>`
-                            : `<span class="text-emerald-700 font-medium">${r.email}</span>`;
+                    for (var i = 0; i < data.results.length; i++) {
+                        var r = data.results[i];
+                        var isUnknown = r.email.indexOf('hid_') !== -1;
+                        var emailHtml = isUnknown 
+                            ? '<span class="text-rose-600 font-bold">' + r.email + ' (未绑定)</span>'
+                            : '<span class="text-emerald-700 font-medium">' + r.email + '</span>';
 
-                        tbody.innerHTML += `
-                            <tr>
-                                <td class="p-3 font-mono text-slate-500">${r.hid}</td>
-                                <td class="p-3">${emailHtml}</td>
-                                <td class="p-3 font-mono">$${r.budget}</td>
-                                <td class="p-3 font-mono">${r.rate_percent}</td>
-                                <td class="p-3 font-mono text-emerald-600 font-bold">$${r.balance}</td>
-                                <td class="p-3"><span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-semibold">${r.groupID}</span></td>
-                            </tr>
-                        `;
-                    });
+                        tbody.innerHTML += '<tr>' +
+                            '<td class="p-3 font-mono text-slate-500">' + r.hid + '</td>' +
+                            '<td class="p-3">' + emailHtml + '</td>' +
+                            '<td class="p-3 font-mono">$' + r.budget + '</td>' +
+                            '<td class="p-3 font-mono">' + r.rate_percent + '</td>' +
+                            '<td class="p-3 font-mono text-emerald-600 font-bold">$' + r.balance + '</td>' +
+                            '<td class="p-3"><span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-semibold">' + r.groupID + '</span></td>' +
+                        '</tr>';
+                    }
 
-                    document.getElementById('hwParsedCount').innerText = `共筛出 ${data.results.length} 条有效记录`;
+                    document.getElementById('hwParsedCount').innerText = '共筛出 ' + data.results.length + ' 条有效记录';
                     document.getElementById('huaweiPreviewArea').classList.remove('hidden');
-                    log(`✅ 华为数据解析完成！已剔除非客户标签和0余额数据，剩余 ${data.results.length} 条真实有效记录。`, 'text-orange-300');
+                    log('✅ 华为数据解析完成！已剔除非客户标签和0余额数据，剩余 ' + data.results.length + ' 条真实有效记录。', 'text-orange-300');
                 } else {
-                    log(`❌ 解析失败: ${data.error}`, 'text-rose-400');
+                    log('❌ 解析失败: ' + data.error, 'text-rose-400');
                 }
             } catch (err) {
-                log(`❌ 请求异常: ${err.message}`, 'text-rose-400');
+                log('❌ 请求异常: ' + err.message, 'text-rose-400');
             }
         }
 
         async function triggerBroadcast() {
             log('正在解析最新数据并生成全量 Telegram 报表...', 'text-yellow-400');
-            const huaweiRaw = document.getElementById('huaweiText').value;
-            const localDict = getLocalDict();
+            var huaweiRaw = document.getElementById('huaweiText').value;
+            var localDict = getLocalDict();
 
             try {
-                const res = await fetch('/api/broadcast', {
+                var res = await fetch('/api/broadcast', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ huawei_raw: huaweiRaw, hw_dict: localDict })
                 });
-                const data = await res.json();
+                var data = await res.json();
                 if (data.success) {
-                    log(`🎉 播报完成！共成功推送了 ${data.total_groups} 个群组。`, 'text-emerald-400');
-                    data.logs.forEach(l => log(l));
+                    log('🎉 播报完成！共成功推送了 ' + data.total_groups + ' 个群组。', 'text-emerald-400');
+                    data.logs.forEach(function(l){ log(l); });
                 } else {
-                    log(`❌ 播报失败: ${data.error}`, 'text-rose-400');
+                    log('❌ 播报失败: ' + data.error, 'text-rose-400');
                 }
             } catch (err) {
-                log(`❌ 请求异常: ${err.message}`, 'text-rose-400');
+                log('❌ 请求异常: ' + err.message, 'text-rose-400');
             }
         }
 
         async function stopBroadcast() {
             log('⚠️ 正在向后台发送中断指令...', 'text-amber-400');
             try {
-                const res = await fetch('/api/stop', { method: 'POST' });
-                const data = await res.json();
+                var res = await fetch('/api/stop', { method: 'POST' });
+                var data = await res.json();
                 log(data.message, 'text-amber-300');
             } catch (err) {
-                log(`❌ 停止请求失败: ${err.message}`, 'text-rose-400');
+                log('❌ 停止请求失败: ' + err.message, 'text-rose-400');
             }
         }
 
@@ -506,15 +509,15 @@ HTML_TEMPLATE = """
             if (!confirm('确定要撤回刚才发送的所有 Telegram 消息吗？')) return;
             log('🔄 正在请求后台物理撤回群组消息...', 'text-rose-300');
             try {
-                const res = await fetch('/api/recall', { method: 'POST' });
-                const data = await res.json();
+                var res = await fetch('/api/recall', { method: 'POST' });
+                var data = await res.json();
                 if (data.success) {
-                    log(`🚀 撤回指令已下达！后台正在删除 ${data.target_count} 条消息...`, 'text-emerald-400');
+                    log('🚀 撤回指令已下达！后台正在删除 ' + data.target_count + ' 条消息...', 'text-emerald-400');
                 } else {
-                    log(`❌ 撤回失败: ${data.error}`, 'text-rose-400');
+                    log('❌ 撤回失败: ' + data.error, 'text-rose-400');
                 }
             } catch (err) {
-                log(`❌ 撤回异常: ${err.message}`, 'text-rose-400');
+                log('❌ 撤回异常: ' + err.message, 'text-rose-400');
             }
         }
     </script>
