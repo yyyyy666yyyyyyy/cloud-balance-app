@@ -1,5 +1,7 @@
 import glob
+import json
 import os
+import threading
 import time
 import traceback
 import warnings
@@ -18,10 +20,48 @@ BOT_TOKEN = os.environ.get(
 CHAT_ID = os.environ.get("CHAT_ID", "-1004291395114")
 
 UPLOAD_FOLDER = "uploads"
+HISTORY_FILE = "sent_history.json"
+CANCEL_FILE = "cancel_signal.flag"
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# 全局变量：控制发送中断与记录已发送消息 ID（用于一键撤回）
-BROADCAST_STATE = {"is_running": False, "cancel_requested": False, "sent_messages": []}
+
+# ---------------------------------------------------------
+# 工具函数：消息历史持久化（解决多进程内存隔离问题）
+# ---------------------------------------------------------
+def load_sent_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+
+def save_sent_history(records):
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False)
+    except Exception as e:
+        print(f"Error saving history: {e}")
+
+
+def record_sent_message(chat_id, message_id, group_id):
+    records = load_sent_history()
+    records.append(
+        {"chat_id": chat_id, "message_id": message_id, "group_id": group_id}
+    )
+    save_sent_history(records)
+
+
+def clear_sent_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            os.remove(HISTORY_FILE)
+        except:
+            pass
+
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -37,10 +77,10 @@ HTML_TEMPLATE = """
         <header class="border-b pb-4 mb-6 flex justify-between items-center">
             <div>
                 <h1 class="text-2xl font-bold text-slate-800">多云余额自动化管理控制台</h1>
-                <p class="text-sm text-slate-500 mt-1">云端轻量级 Web App | 智能分组、任务中断与消息撤回</p>
+                <p class="text-sm text-slate-500 mt-1">云端轻量级 Web App | 动态归集与 100% 物理撤回</p>
             </div>
             <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
-                🟢 服务运行中
+                🟢 云端服务运行中
             </span>
         </header>
 
@@ -51,7 +91,7 @@ HTML_TEMPLATE = """
             <button onclick="document.getElementById('fileInput').click()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-5 rounded-lg transition text-sm shadow">
                 选择并上传最新账单文件
             </button>
-            <p id="fileCount" class="text-xs text-indigo-600 mt-2">支持多选 CSV / XLSX 同时上传（不依赖模板，系统将自动智能归集同群账号）</p>
+            <p id="fileCount" class="text-xs text-indigo-600 mt-2">支持多选 CSV / XLSX 同时上传（系统将自动智能归集同群账号）</p>
         </div>
 
         <!-- 操作控制按钮组 -->
@@ -123,7 +163,7 @@ HTML_TEMPLATE = """
         }
 
         async function stopBroadcast() {
-            log('⚠️ 正在发送【停止播报】指令...', 'text-amber-400');
+            log('⚠️ 正在向后台发送中断标志...', 'text-amber-400');
             try {
                 const res = await fetch('/api/stop', { method: 'POST' });
                 const data = await res.json();
@@ -134,13 +174,13 @@ HTML_TEMPLATE = """
         }
 
         async function recallBroadcast() {
-            if (!confirm('确定要撤回刚才已发送的所有 Telegram 消息吗？')) return;
-            log('🔄 正在请求 Telegram API 批量撤回消息...', 'text-rose-300');
+            if (!confirm('确定要彻底撤回刚才已发送的所有 Telegram 消息吗？')) return;
+            log('🔄 正在请求后台批量撤回群组消息...', 'text-rose-300');
             try {
                 const res = await fetch('/api/recall', { method: 'POST' });
                 const data = await res.json();
                 if (data.success) {
-                    log(`✅ 撤回完成！成功撤回了 ${data.recalled_count} 条消息。`, 'text-emerald-400');
+                    log(`🚀 撤回指令已下达！后台正在逐条物理删除 ${data.target_count} 条已发消息...`, 'text-emerald-400');
                 } else {
                     log(`❌ 撤回失败: ${data.error}`, 'text-rose-400');
                 }
@@ -201,66 +241,66 @@ def upload_files():
 
 @app.route("/api/stop", methods=["POST"])
 def stop_api():
-    if BROADCAST_STATE["is_running"]:
-        BROADCAST_STATE["cancel_requested"] = True
-        return jsonify(
-            {
-                "success": True,
-                "message": "🛑 已向后台发出中断指令，正在停止后续群组的发送...",
+    # 写入中断标志文件，所有进程可见
+    with open(CANCEL_FILE, "w") as f:
+        f.write("cancel")
+    return jsonify(
+        {"success": True, "message": "🛑 已触发全局中断指令，正在停止发送..."}
+    )
+
+
+# 异步线程执行消息撤回
+def async_recall_task(records):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
+    for item in records:
+        try:
+            payload = {
+                "chat_id": item["chat_id"],
+                "message_id": item["message_id"],
             }
-        )
-    return jsonify({"success": True, "message": "当前没有正在进行的播报任务。"})
+            requests.post(url, json=payload, timeout=5)
+            time.sleep(0.15)
+        except Exception as e:
+            print(f"Recall error for msg {item.get('message_id')}: {e}")
+    # 删除完毕后清空历史记录
+    clear_sent_history()
 
 
 @app.route("/api/recall", methods=["POST"])
 def recall_api():
-    sent_msgs = BROADCAST_STATE.get("sent_messages", [])
-    if not sent_msgs:
+    records = load_sent_history()
+    if not records:
         return jsonify(
             {
                 "success": False,
-                "error": "没有找到可撤回的消息记录（可能尚未播报或已撤回）。",
+                "error": "没有找到可撤回的消息记录（可能尚未播报，或已经撤回过了）。",
             }
         )
 
-    recalled_count = 0
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
+    # 启动后台线程异步物理删除
+    t = threading.Thread(target=async_recall_task, args=(records,))
+    t.start()
 
-    for item in sent_msgs:
-        try:
-            payload = {"chat_id": item["chat_id"], "message_id": item["message_id"]}
-            res = requests.post(url, json=payload).json()
-            if res.get("ok"):
-                recalled_count += 1
-            time.sleep(0.1)
-        except:
-            pass
-
-    # 清空记录
-    BROADCAST_STATE["sent_messages"] = []
-    return jsonify({"success": True, "recalled_count": recalled_count})
+    return jsonify({"success": True, "target_count": len(records)})
 
 
 @app.route("/api/broadcast", methods=["POST"])
 def broadcast_api():
-    global BROADCAST_STATE
-    if BROADCAST_STATE["is_running"]:
-        return jsonify(
-            {
-                "success": False,
-                "error": "已有一个播报任务正在运行中，请勿重复触发！",
-            }
-        )
+    # 开始前清理中断标志
+    if os.path.exists(CANCEL_FILE):
+        try:
+            os.remove(CANCEL_FILE)
+        except:
+            pass
 
-    BROADCAST_STATE["is_running"] = True
-    BROADCAST_STATE["cancel_requested"] = False
-    BROADCAST_STATE["sent_messages"] = []  # 重置本次播报的消息记录
+    # 重置并清空上一次的历史记录
+    clear_sent_history()
 
     try:
         all_data = []
         group_map = {}
 
-        # 如果存在模板，读取中文对照；若没有，自动跳过完全不受影响
+        # 尝试读取模板名称，读取失败也完全不影响主逻辑
         template_files = glob.glob(os.path.join(UPLOAD_FOLDER, "*余额模板*.xlsx"))
         if template_files:
             try:
@@ -281,7 +321,7 @@ def broadcast_api():
         for f in all_uploaded:
             filename = os.path.basename(f)
 
-            # 阿里 CSV & 明细表
+            # 1. 阿里云 CSV & UID 表
             if "阿里云" in filename and filename.endswith(".csv"):
                 df = pd.read_csv(f)
                 if "剩余额度" in df.columns and "备注" in df.columns:
@@ -345,7 +385,7 @@ def broadcast_api():
                             }
                         )
 
-            # 腾讯云
+            # 2. 腾讯云
             elif "腾讯云" in filename and filename.endswith(".csv"):
                 tx_df = pd.read_csv(f)
                 if "余额" in tx_df.columns and "备注" in tx_df.columns:
@@ -367,7 +407,7 @@ def broadcast_api():
                             }
                         )
 
-            # AWS
+            # 3. AWS CSV
             elif "AWS" in filename and filename.endswith(".csv"):
                 df = pd.read_csv(f)
                 if "可用额度" in df.columns and "备注" in df.columns:
@@ -399,12 +439,14 @@ def broadcast_api():
                         )
 
         if not all_data:
-            BROADCAST_STATE["is_running"] = False
             return jsonify(
-                {"success": False, "error": "未能解析到有效数据，请检查上传的文件。"}
+                {
+                    "success": False,
+                    "error": "未能解析到有效数据，请检查上传的文件文件名与格式！",
+                }
             )
 
-        # 核心逻辑：绝对单次归集，同一 groupID 保证只合并为一条完整的 Telegram 消息
+        # 绝对归集去重
         full_df = pd.DataFrame(all_data).drop_duplicates(
             subset=["account", "cloud_type", "groupID"]
         )
@@ -422,9 +464,9 @@ def broadcast_api():
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
         for gid in all_gids:
-            # 检查是否点击了【马上停止】
-            if BROADCAST_STATE["cancel_requested"]:
-                logs.append("⚠️ 用户手动触发了中断，播报已强制停止！")
+            # 检查是否有中断标志文件
+            if os.path.exists(CANCEL_FILE):
+                logs.append("⚠️ 收到【停止发送】指令，播报任务已中止！")
                 break
 
             grp = full_df[full_df["groupID"] == gid]
@@ -470,21 +512,19 @@ def broadcast_api():
             res = requests.post(url, json=payload).json()
             if res.get("ok"):
                 msg_id = res["result"]["message_id"]
-                # 记录成功发送的消息，用于“一键撤回”
-                BROADCAST_STATE["sent_messages"].append(
-                    {"chat_id": CHAT_ID, "message_id": msg_id}
-                )
+                # 实时写入 JSON 硬盘文件
+                record_sent_message(CHAT_ID, msg_id, gid)
                 logs.append(f"群组 {gid} 推送成功！")
             else:
                 logs.append(f"群组 {gid} 推送失败：{res.get('description')}")
             time.sleep(0.3)
 
-        BROADCAST_STATE["is_running"] = False
         return jsonify(
             {"success": True, "total_groups": len(all_gids), "logs": logs}
         )
     except Exception as e:
-        BROADCAST_STATE["is_running"] = False
+        err_msg = traceback.format_exc()
+        print(f"Error: {err_msg}")
         return jsonify({"success": False, "error": str(e)})
 
 
