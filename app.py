@@ -93,7 +93,7 @@ def parse_huawei_multiline_text(raw_text, hw_dict):
         if not block.strip() or "hid_" not in block:
             continue
 
-        hid_match = re.search(r"(hid_[a-zA-Z0-9_]+)", block)
+        hid_match = re.search(r"(hid_[a-zA-Z0-9_-]+)", block)
         if not hid_match:
             continue
         hid = hid_match.group(1).strip()
@@ -140,7 +140,7 @@ HTML_TEMPLATE = """
 </head>
 <body class="bg-slate-100 min-h-screen flex font-sans">
 
-    <!-- 侧边栏侧边导航 (Sidebar) -->
+    <!-- 侧边栏侧边导航 -->
     <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col min-h-screen p-4 flex-shrink-0 shadow-xl">
         <div class="px-3 py-4 border-b border-slate-800 mb-6 flex items-center gap-3">
             <div class="bg-indigo-600 p-2 rounded-lg text-white font-bold"><i class="fa-solid fa-cloud"></i></div>
@@ -170,7 +170,7 @@ HTML_TEMPLATE = """
         </div>
     </aside>
 
-    <!-- 右侧内容主区 (Main Content) -->
+    <!-- 右侧内容主区 -->
     <main class="flex-1 p-8 overflow-y-auto">
 
         <!-- Tab 1: 播报控制台 -->
@@ -259,7 +259,7 @@ HTML_TEMPLATE = """
             <!-- 批量粘贴导入 -->
             <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
                 <h3 class="font-bold text-slate-800 text-sm">📋 批量添加/导入 HID 映射 (从 Excel 复制两列粘贴):</h3>
-                <textarea id="batchDictText" rows="5" placeholder="例如:&#10;hid_zn95r7sct0e_89c    user1@gmail.com&#10;hid_vq6bvj74w5ojewa    user2@gmail.com" class="w-full p-3 border rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-none"></textarea>
+                <textarea id="batchDictText" rows="6" placeholder="例如:&#10;hid_4qx0z3vpw753w-x    4epdohna@anyrelax.fun&#10;hid_php7e3sdtrt6n6uy    psutgjdr@anyrelax.fun" class="w-full p-3 border rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-none bg-slate-50/50"></textarea>
                 <div class="flex justify-end">
                     <button onclick="importBatchDict()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium px-5 py-2.5 rounded-lg transition shadow">
                         批量保存映射
@@ -291,7 +291,6 @@ HTML_TEMPLATE = """
     </main>
 
     <script>
-        // 本地持久化字典 (LocalStorage)
         function getLocalDict() {
             try {
                 return JSON.parse(localStorage.getItem('huawei_hid_dict')) || {};
@@ -351,21 +350,27 @@ HTML_TEMPLATE = """
 
         function importBatchDict() {
             const text = document.getElementById('batchDictText').value;
-            if (!text.trim()) return alert('请先粘贴包含 HID 和 邮箱 的表格数据！');
+            if (!text || !text.trim()) return alert('请先粘贴包含 HID 和 邮箱 的表格数据！');
 
             const dict = getLocalDict();
             let count = 0;
-            text.strip().split('\\n').forEach(line => {
+            const lines = text.trim().split(/\\r?\\n/);
+
+            lines.forEach(line => {
                 const parts = line.trim().split(/\\s+/);
-                if (parts.length >= 2 && parts[0].includes('hid_')) {
-                    dict[parts[0].trim()] = parts[1].trim();
-                    count++;
+                if (parts.length >= 2) {
+                    const possibleHid = parts[0].trim();
+                    const possibleEmail = parts[1].trim();
+                    if (possibleHid.includes('hid_')) {
+                        dict[possibleHid] = possibleEmail;
+                        count++;
+                    }
                 }
             });
 
             saveLocalDict(dict);
             document.getElementById('batchDictText').value = '';
-            alert(`✅ 成功批量添加/更新了 ${count} 条 HID 映射！`);
+            alert(`🎉 成功批量保存了 ${count} 条 HID 映射字典！`);
         }
 
         function deleteDictKey(key) {
@@ -408,7 +413,7 @@ HTML_TEMPLATE = """
         async function parseAndPreviewHuawei() {
             const text = document.getElementById('huaweiText').value;
             if (!text.trim()) {
-                alert('请先将华为页面拉取到的表格数据粘贴进文本框！');
+                alert('请先在文本框里粘贴华为拉取的数据！');
                 return;
             }
 
@@ -494,7 +499,7 @@ HTML_TEMPLATE = """
                 const res = await fetch('/api/recall', { method: 'POST' });
                 const data = await res.json();
                 if (data.success) {
-                    log(`🚀 撤回指令已下查！后台正在物理删除 ${data.target_count} 条消息...`, 'text-emerald-400');
+                    log(`🚀 撤回指令已下达！后台正在删除 ${data.target_count} 条消息...`, 'text-emerald-400');
                 } else {
                     log(`❌ 撤回失败: ${data.error}`, 'text-rose-400');
                 }
