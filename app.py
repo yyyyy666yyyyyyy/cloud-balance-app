@@ -289,7 +289,7 @@ HTML_TEMPLATE = """
 
             <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
                 <h3 class="font-bold text-slate-800 text-sm">📋 批量添加/导入 HID 映射:</h3>
-                <textarea id="batchDictText" rows="6" placeholder="例如:&#10;hid_4qx0z3vpw753w-x    4epdohna@anyrelax.fun&#10;hid_php7e3sdtrt6n6uy    psutgjdr@anyrelax.fun" class="w-full p-3 border rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-none bg-slate-50/50"></textarea>
+                <textarea id="batchDictText" rows="6" placeholder="例如:&#10;hid_u2oi0snvj10umpe    o3enur4yljlzp@anyrelax.fun&#10;hid_gequmxnuply07xe    4w23ax4aohp2@anyrelax.fun" class="w-full p-3 border rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-none bg-slate-50/50"></textarea>
                 <div class="flex justify-end">
                     <button onclick="importBatchDict()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium px-5 py-2.5 rounded-lg transition shadow">
                         批量保存映射
@@ -362,31 +362,32 @@ HTML_TEMPLATE = """
             }
         }
 
-        function importBatchDict() {
+        async function importBatchDict() {
             var text = document.getElementById('batchDictText').value;
             if (!text || !text.trim()) return alert('请先粘贴包含 HID 和 邮箱 的表格数据！');
 
-            var dict = getLocalDict();
-            var count = 0;
-            var lines = text.trim().split('\n');
-
-            for (var i = 0; i < lines.length; i++) {
-                var line = lines[i].trim();
-                if (!line) continue;
-                var parts = line.split(/\s+/);
-                if (parts.length >= 2) {
-                    var possibleHid = parts[0].trim();
-                    var possibleEmail = parts[1].trim();
-                    if (possibleHid.indexOf('hid_') !== -1) {
-                        dict[possibleHid] = possibleEmail;
-                        count++;
+            try {
+                var res = await fetch('/api/huawei/dict/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ raw_text: text })
+                });
+                var data = await res.json();
+                if (data.success) {
+                    var localDict = getLocalDict();
+                    var keys = Object.keys(data.parsed_dict);
+                    for (var i = 0; i < keys.length; i++) {
+                        localDict[keys[i]] = data.parsed_dict[keys[i]];
                     }
+                    saveLocalDict(localDict);
+                    document.getElementById('batchDictText').value = '';
+                    alert('🎉 成功批量保存了 ' + data.count + ' 条 HID 映射字典！');
+                } else {
+                    alert('❌ 保存失败: ' + data.error);
                 }
+            } catch (err) {
+                alert('❌ 请求发生异常: ' + err.message);
             }
-
-            saveLocalDict(dict);
-            document.getElementById('batchDictText').value = '';
-            alert('🎉 成功批量保存了 ' + count + ' 条 HID 映射字典！');
         }
 
         function deleteDictKey(key) {
@@ -544,6 +545,33 @@ def upload_files():
                 file.save(file_path)
                 count += 1
         return jsonify({"success": True, "uploaded_count": count})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/huawei/dict/import", methods=["POST"])
+def huawei_dict_import_api():
+    try:
+        data = request.json or {}
+        raw_text = data.get("raw_text", "")
+        lines = raw_text.strip().split("\n")
+        parsed_dict = {}
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str:
+                continue
+            # 后端强大的通用切分逻辑 (Tab、空格、逗号全兼容)
+            parts = re.split(r"[\s,\t]+", line_str)
+            if len(parts) >= 2:
+                hid_cand = parts[0].strip()
+                email_cand = parts[1].strip()
+                if "hid_" in hid_cand:
+                    parsed_dict[hid_cand] = email_cand
+
+        return jsonify(
+            {"success": True, "count": len(parsed_dict), "parsed_dict": parsed_dict}
+        )
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
