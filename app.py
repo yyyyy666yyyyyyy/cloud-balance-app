@@ -22,30 +22,8 @@ CHAT_ID = os.environ.get("CHAT_ID", "-1004291395114")
 UPLOAD_FOLDER = "uploads"
 HISTORY_FILE = "sent_history.json"
 CANCEL_FILE = "cancel_signal.flag"
-HUAWEI_DICT_FILE = "huawei_dict.json"
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-
-# ---------------------------------------------------------
-# 持久化工具函数
-# ---------------------------------------------------------
-def load_huawei_dict():
-    if os.path.exists(HUAWEI_DICT_FILE):
-        try:
-            with open(HUAWEI_DICT_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
-
-
-def save_huawei_dict(dictionary):
-    try:
-        with open(HUAWEI_DICT_FILE, "w", encoding="utf-8") as f:
-            json.dump(dictionary, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"Error saving huawei dict: {e}")
 
 
 def load_sent_history():
@@ -107,40 +85,31 @@ def clean_num(val):
         return 0.0
 
 
-# 深度解析华为乱序多行文本
-def parse_huawei_multiline_text(raw_text):
-    hw_dict = load_huawei_dict()
+def parse_huawei_multiline_text(raw_text, hw_dict):
     parsed_results = []
-
-    # 按客户数据块切割（以 H****D 或 hid_ 为锚点）
     blocks = re.split(r"(?=hid_)", raw_text)
 
     for block in blocks:
         if not block.strip() or "hid_" not in block:
             continue
 
-        # 1. 提取 HID
         hid_match = re.search(r"(hid_[a-zA-Z0-9_]+)", block)
         if not hid_match:
             continue
-        hid = hid_match.group(1)
+        hid = hid_match.group(1).strip()
 
-        # 2. 提取百分比使用率 (如 30.02% 或 0%)
         rate_match = re.search(r"(\d+(?:\.\d+)?)\s*%", block)
         usage_rate = float(rate_match.group(1)) / 100.0 if rate_match else 0.0
 
-        # 3. 提取所有浮点数/数字，筛选一次性预算 (紧接着百分比前面的数字，或者最大的合理数值)
         numbers = re.findall(r"[\d,]+\.\d{2}", block)
         budget = 0.0
         if numbers:
             budget = max([clean_num(n) for n in numbers])
 
-        # 4. 提取标签 (如 C00897-CDN, C01006-NICK)
         tag_match = re.search(r"(C\d{4,5}[-\w]*)", block)
         tag = tag_match.group(1) if tag_match else ""
         gid = parse_tag(tag) if tag else None
 
-        # 映射邮箱与计算余额
         email = hw_dict.get(hid, hid)
         calc_balance = budget * (1.0 - usage_rate) if usage_rate <= 1.0 else 0.0
 
@@ -165,98 +134,251 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>多云余额管理控制台 (SaaS 版)</title>
+    <title>多云余额自动化管理控制台</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
-<body class="bg-slate-100 min-h-screen p-8 font-sans">
-    <div class="max-w-5xl mx-auto bg-white rounded-xl shadow-lg p-6">
-        <header class="border-b pb-4 mb-6 flex justify-between items-center">
-            <div>
-                <h1 class="text-2xl font-bold text-slate-800">多云余额自动化管理控制台</h1>
-                <p class="text-sm text-slate-500 mt-1">云端轻量级 Web App | 华为数据解析预览与 Telegram 撤回</p>
-            </div>
-            <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
-                🟢 云端服务运行中
-            </span>
-        </header>
+<body class="bg-slate-100 min-h-screen flex font-sans">
 
-        <!-- 1. 常规文件上传区域 -->
-        <div class="mb-6 border-2 border-dashed border-indigo-200 rounded-xl p-5 bg-indigo-50/40 text-center">
-            <h3 class="text-indigo-900 font-semibold mb-1">📁 阿里云 / 腾讯云 / AWS 列表上传</h3>
-            <input type="file" id="fileInput" multiple accept=".csv, .xlsx" class="hidden" onchange="handleFileSelect(event)">
-            <button onclick="document.getElementById('fileInput').click()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-5 rounded-lg transition text-sm shadow">
-                选择并上传 CSV / XLSX 文件
-            </button>
-            <p id="fileCount" class="text-xs text-indigo-600 mt-2">支持多选 CSV / XLSX 同时上传</p>
+    <!-- 侧边栏侧边导航 (Sidebar) -->
+    <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col min-h-screen p-4 flex-shrink-0 shadow-xl">
+        <div class="px-3 py-4 border-b border-slate-800 mb-6 flex items-center gap-3">
+            <div class="bg-indigo-600 p-2 rounded-lg text-white font-bold"><i class="fa-solid fa-cloud"></i></div>
+            <div>
+                <h2 class="text-white font-bold text-base leading-tight">多云管理系统</h2>
+                <p class="text-xs text-slate-500">SaaS Web 控制台</p>
+            </div>
         </div>
 
-        <!-- 2. 华为云专用粘贴 & 映射预览专区 -->
-        <div class="mb-6 border border-orange-200 rounded-xl p-5 bg-orange-50/30">
-            <h3 class="text-orange-900 font-semibold mb-2 flex justify-between items-center">
-                <span>⚡ 华为云专区（直接复制粘贴页面数据）</span>
-                <button onclick="parseAndPreviewHuawei()" class="bg-orange-600 hover:bg-orange-700 text-white text-xs font-medium px-4 py-1.5 rounded transition shadow">
+        <nav class="space-y-1 flex-1">
+            <button onclick="switchTab('dashboard')" id="nav-dashboard" class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-indigo-600 text-white transition">
+                <i class="fa-solid fa-gauge w-5"></i> 播报控制台
+            </button>
+            <button onclick="switchTab('huawei')" id="nav-huawei" class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition">
+                <i class="fa-solid fa-bolt text-orange-400 w-5"></i> 华为云专区
+            </button>
+            <button onclick="switchTab('dictionary')" id="nav-dictionary" class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition">
+                <i class="fa-solid fa-book w-5"></i> HID 映射字典
+            </button>
+        </nav>
+
+        <div class="p-3 bg-slate-800/60 rounded-lg border border-slate-700/50 text-xs">
+            <div class="flex items-center gap-2 text-emerald-400 mb-1 font-semibold">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> 云端服务就绪
+            </div>
+            <p class="text-slate-400">Telegram Bot: 正常连线</p>
+        </div>
+    </aside>
+
+    <!-- 右侧内容主区 (Main Content) -->
+    <main class="flex-1 p-8 overflow-y-auto">
+
+        <!-- Tab 1: 播报控制台 -->
+        <section id="tab-dashboard" class="space-y-6">
+            <header class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center">
+                <div>
+                    <h1 class="text-2xl font-bold text-slate-800">全量播报控制台</h1>
+                    <p class="text-sm text-slate-500 mt-1">支持多云列表文件上传与一键全量 Telegram 广播</p>
+                </div>
+            </header>
+
+            <div class="border-2 border-dashed border-indigo-200 rounded-xl p-6 bg-indigo-50/40 text-center">
+                <h3 class="text-indigo-900 font-semibold mb-2">📁 上传阿里云 / 腾讯云 / AWS 账单列表</h3>
+                <input type="file" id="fileInput" multiple accept=".csv, .xlsx" class="hidden" onchange="handleFileSelect(event)">
+                <button onclick="document.getElementById('fileInput').click()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-5 rounded-lg transition text-sm shadow">
+                    选择上传 CSV / XLSX 文件
+                </button>
+                <p id="fileCount" class="text-xs text-indigo-600 mt-2">支持多选文件同时上传</p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <button id="sendBtn" onclick="triggerBroadcast()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 shadow-sm">
+                    🚀 一键全量播报
+                </button>
+                <button id="stopBtn" onclick="stopBroadcast()" class="bg-amber-500 hover:bg-amber-600 text-white font-medium py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 shadow-sm">
+                    ⏹️ 马上停止发送
+                </button>
+                <button id="recallBtn" onclick="recallBroadcast()" class="bg-rose-600 hover:bg-rose-700 text-white font-medium py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 shadow-sm">
+                    ↩️ 一键撤回已发消息
+                </button>
+            </div>
+
+            <div class="border rounded-xl p-4 bg-slate-900 text-slate-100 font-mono text-sm min-h-[300px] max-h-[500px] overflow-y-auto" id="logBox">
+                <p class="text-slate-400">> 云端系统已就绪，请选择上传账单文件或在华为专区粘贴数据...</p>
+            </div>
+        </section>
+
+
+        <!-- Tab 2: 华为云专区 -->
+        <section id="tab-huawei" class="hidden space-y-6">
+            <header class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center">
+                <div>
+                    <h1 class="text-2xl font-bold text-slate-800">华为云数据专区</h1>
+                    <p class="text-sm text-slate-500 mt-1">全选粘贴华为拉取的整块多行表格数据，自动匹配字典并计算余额</p>
+                </div>
+                <button onclick="parseAndPreviewHuawei()" class="bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition shadow">
                     🔍 解析并预览华为数据
                 </button>
-            </h3>
-            
-            <textarea id="huaweiText" rows="4" placeholder="直接全选粘贴从华为拉取出来的整块错位数据..." class="w-full p-3 border rounded-lg font-mono text-xs text-slate-700 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-white mb-3"></textarea>
-            
-            <!-- 华为解析预览表格 (默认隐藏，点击解析后展示) -->
-            <div id="huaweiPreviewArea" class="hidden mb-4 border rounded-lg bg-white overflow-hidden shadow-sm">
-                <div class="bg-orange-100 px-4 py-2 border-b flex justify-between items-center">
-                    <span class="text-xs font-bold text-orange-900">📊 华为云解析结果人工核查 (发前预览)</span>
-                    <span id="hwParsedCount" class="text-xs text-orange-700"></span>
+            </header>
+
+            <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                <textarea id="huaweiText" rows="6" placeholder="请直接在此处粘贴华为页面全选拉取出的多行错位文本..." class="w-full p-4 border rounded-xl font-mono text-xs text-slate-700 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-slate-50/50"></textarea>
+
+                <div id="huaweiPreviewArea" class="hidden border rounded-xl bg-white overflow-hidden shadow-sm">
+                    <div class="bg-orange-100 px-4 py-3 border-b flex justify-between items-center">
+                        <span class="text-xs font-bold text-orange-900">📊 华为云解析结果人工核查 (发前预览)</span>
+                        <span id="hwParsedCount" class="text-xs text-orange-700 font-medium"></span>
+                    </div>
+                    <div class="max-h-80 overflow-y-auto">
+                        <table class="w-full text-left text-xs">
+                            <thead class="bg-slate-50 text-slate-600 border-b">
+                                <tr>
+                                    <th class="p-3">HID</th>
+                                    <th class="p-3">映射邮箱/账号</th>
+                                    <th class="p-3">一次性预算</th>
+                                    <th class="p-3">使用率</th>
+                                    <th class="p-3">算得余额</th>
+                                    <th class="p-3">提取 GroupID</th>
+                                </tr>
+                            </thead>
+                            <tbody id="hwTableBody" class="divide-y text-slate-700"></tbody>
+                        </table>
+                    </div>
                 </div>
-                <div class="max-h-60 overflow-y-auto">
+            </div>
+        </section>
+
+
+        <!-- Tab 3: HID 映射字典管理 -->
+        <section id="tab-dictionary" class="hidden space-y-6">
+            <header class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                <h1 class="text-2xl font-bold text-slate-800">华为 HID 邮箱字典管理</h1>
+                <p class="text-sm text-slate-500 mt-1">支持批量粘贴表格导入 HID 映射，永久保存在你的浏览器中</p>
+            </header>
+
+            <!-- 批量粘贴导入 -->
+            <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                <h3 class="font-bold text-slate-800 text-sm">📋 批量添加/导入 HID 映射 (从 Excel 复制两列粘贴):</h3>
+                <textarea id="batchDictText" rows="5" placeholder="例如:&#10;hid_zn95r7sct0e_89c    user1@gmail.com&#10;hid_vq6bvj74w5ojewa    user2@gmail.com" class="w-full p-3 border rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-none"></textarea>
+                <div class="flex justify-end">
+                    <button onclick="importBatchDict()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium px-5 py-2.5 rounded-lg transition shadow">
+                        批量保存映射
+                    </button>
+                </div>
+            </div>
+
+            <!-- 当前字典列表 -->
+            <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div class="p-4 border-b bg-slate-50 flex justify-between items-center">
+                    <span class="font-bold text-slate-700 text-sm">已生效的 HID 映射字典列表</span>
+                    <button onclick="clearAllDict()" class="text-xs text-rose-600 hover:underline">清空所有字典</button>
+                </div>
+                <div class="max-h-80 overflow-y-auto">
                     <table class="w-full text-left text-xs">
-                        <thead class="bg-slate-50 text-slate-600 border-b">
+                        <thead class="bg-slate-100 text-slate-600 border-b">
                             <tr>
-                                <th class="p-2.5">HID</th>
-                                <th class="p-2.5">映射邮箱/账号</th>
-                                <th class="p-2.5">预算</th>
-                                <th class="p-2.5">使用率</th>
-                                <th class="p-2.5">自动算得余额</th>
-                                <th class="p-2.5">提取 GroupID</th>
+                                <th class="p-3">HID 标识</th>
+                                <th class="p-3">映射真实邮箱</th>
+                                <th class="p-3 text-right">操作</th>
                             </tr>
                         </thead>
-                        <tbody id="hwTableBody" class="divide-y text-slate-700"></tbody>
+                        <tbody id="dictTableBody" class="divide-y"></tbody>
                     </table>
                 </div>
             </div>
+        </section>
 
-            <!-- 快速加新的 HID 字典映射 -->
-            <div class="flex gap-2 items-center bg-white p-3 border rounded-lg">
-                <span class="text-xs font-medium text-slate-600">➕ 补全未识别 HID 映射:</span>
-                <input type="text" id="newHid" placeholder="HID (如 hid_xxx)" class="border rounded px-2 py-1 text-xs flex-1">
-                <input type="text" id="newEmail" placeholder="真实邮箱 (如 user@abc.com)" class="border rounded px-2 py-1 text-xs flex-1">
-                <button onclick="addHidMapping()" class="bg-orange-600 hover:bg-orange-700 text-white text-xs font-medium px-4 py-1.5 rounded transition">保存并更新预览</button>
-            </div>
-        </div>
-
-        <!-- 3. 操作控制按钮组 -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <button id="sendBtn" onclick="triggerBroadcast()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-3 px-4 rounded-lg transition flex items-center justify-center gap-2 shadow">
-                🚀 一键全量播报
-            </button>
-            <button id="stopBtn" onclick="stopBroadcast()" class="bg-amber-500 hover:bg-amber-600 text-white font-medium py-3 px-4 rounded-lg transition flex items-center justify-center gap-2 shadow">
-                ⏹️ 马上停止发送
-            </button>
-            <button id="recallBtn" onclick="recallBroadcast()" class="bg-rose-600 hover:bg-rose-700 text-white font-medium py-3 px-4 rounded-lg transition flex items-center justify-center gap-2 shadow">
-                ↩️ 一键撤回已发消息
-            </button>
-        </div>
-
-        <!-- 4. 实时日志输出框 -->
-        <div class="border rounded-lg p-4 bg-slate-900 text-slate-100 font-mono text-sm min-h-[240px] max-h-[440px] overflow-y-auto" id="logBox">
-            <p class="text-slate-400">> 系统就绪，请上传文件或粘贴华为数据...</p>
-        </div>
-    </div>
+    </main>
 
     <script>
+        // 本地持久化字典 (LocalStorage)
+        function getLocalDict() {
+            try {
+                return JSON.parse(localStorage.getItem('huawei_hid_dict')) || {};
+            } catch {
+                return {};
+            }
+        }
+
+        function saveLocalDict(dict) {
+            localStorage.setItem('huawei_hid_dict', JSON.stringify(dict));
+            renderDictTable();
+        }
+
+        function switchTab(tabName) {
+            ['dashboard', 'huawei', 'dictionary'].forEach(t => {
+                document.getElementById(`tab-${t}`).classList.add('hidden');
+                const btn = document.getElementById(`nav-${t}`);
+                btn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition";
+            });
+
+            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+            const activeBtn = document.getElementById(`nav-${tabName}`);
+            activeBtn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-indigo-600 text-white transition";
+
+            if (tabName === 'dictionary') renderDictTable();
+        }
+
         function log(msg, color='text-slate-200') {
             const box = document.getElementById('logBox');
             box.innerHTML += `<p class="${color} mt-1">> ${msg}</p>`;
             box.scrollTop = box.scrollHeight;
+        }
+
+        function renderDictTable() {
+            const dict = getLocalDict();
+            const tbody = document.getElementById('dictTableBody');
+            tbody.innerHTML = '';
+            const keys = Object.keys(dict);
+
+            if (keys.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-slate-400">暂无任何 HID 映射，请在上方粘贴批量导入！</td></tr>`;
+                return;
+            }
+
+            keys.forEach(k => {
+                tbody.innerHTML += `
+                    <tr>
+                        <td class="p-3 font-mono text-slate-600">${k}</td>
+                        <td class="p-3 font-medium text-emerald-700">${dict[k]}</td>
+                        <td class="p-3 text-right">
+                            <button onclick="deleteDictKey('${k}')" class="text-rose-500 hover:text-rose-700"><i class="fa-solid fa-trash"></i></button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        function importBatchDict() {
+            const text = document.getElementById('batchDictText').value;
+            if (!text.trim()) return alert('请先粘贴包含 HID 和 邮箱 的表格数据！');
+
+            const dict = getLocalDict();
+            let count = 0;
+            text.strip().split('\\n').forEach(line => {
+                const parts = line.trim().split(/\\s+/);
+                if (parts.length >= 2 && parts[0].includes('hid_')) {
+                    dict[parts[0].trim()] = parts[1].trim();
+                    count++;
+                }
+            });
+
+            saveLocalDict(dict);
+            document.getElementById('batchDictText').value = '';
+            alert(`✅ 成功批量添加/更新了 ${count} 条 HID 映射！`);
+        }
+
+        function deleteDictKey(key) {
+            const dict = getLocalDict();
+            delete dict[key];
+            saveLocalDict(dict);
+        }
+
+        function clearAllDict() {
+            if (confirm('确认清空所有 HID 映射词典吗？')) {
+                localStorage.removeItem('huawei_hid_dict');
+                renderDictTable();
+            }
         }
 
         async function handleFileSelect(event) {
@@ -286,15 +408,17 @@ HTML_TEMPLATE = """
         async function parseAndPreviewHuawei() {
             const text = document.getElementById('huaweiText').value;
             if (!text.trim()) {
-                alert('请先将华为页面拉取到的表格数据粘贴进输入框！');
+                alert('请先将华为页面拉取到的表格数据粘贴进文本框！');
                 return;
             }
+
+            const localDict = getLocalDict();
 
             try {
                 const res = await fetch('/api/huawei/parse', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ raw_text: text })
+                    body: JSON.stringify({ raw_text: text, hw_dict: localDict })
                 });
                 const data = await res.json();
                 if (data.success) {
@@ -308,17 +432,17 @@ HTML_TEMPLATE = """
 
                         tbody.innerHTML += `
                             <tr>
-                                <td class="p-2.5 font-mono text-slate-500">${r.hid}</td>
-                                <td class="p-2.5">${emailHtml}</td>
-                                <td class="p-2.5 font-mono">$${r.budget}</td>
-                                <td class="p-2.5 font-mono">${r.rate_percent}</td>
-                                <td class="p-2.5 font-mono text-emerald-600 font-bold">$${r.balance}</td>
-                                <td class="p-2.5"><span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">${r.groupID}</span></td>
+                                <td class="p-3 font-mono text-slate-500">${r.hid}</td>
+                                <td class="p-3">${emailHtml}</td>
+                                <td class="p-3 font-mono">$${r.budget}</td>
+                                <td class="p-3 font-mono">${r.rate_percent}</td>
+                                <td class="p-3 font-mono text-emerald-600 font-bold">$${r.balance}</td>
+                                <td class="p-3"><span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-semibold">${r.groupID}</span></td>
                             </tr>
                         `;
                     });
 
-                    document.getElementById('hwParsedCount').innerText = `成功识别出 ${data.results.length} 条账号记录`;
+                    document.getElementById('hwParsedCount').innerText = `识别出 ${data.results.length} 条记录`;
                     document.getElementById('huaweiPreviewArea').classList.remove('hidden');
                     log(`✅ 华为数据解析完成！已生成下方 ${data.results.length} 条预览表格供核对。`, 'text-orange-300');
                 } else {
@@ -329,43 +453,16 @@ HTML_TEMPLATE = """
             }
         }
 
-        async function addHidMapping() {
-            const hid = document.getElementById('newHid').value.trim();
-            const email = document.getElementById('newEmail').value.trim();
-            if (!hid || !email) {
-                alert('请同时输入 HID 和对应的真实邮箱！');
-                return;
-            }
-
-            try {
-                const res = await fetch('/api/huawei/dict', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ hid, email })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    log(`✅ 华为映射添加成功: ${hid} ➔ ${email}`, 'text-orange-300');
-                    document.getElementById('newHid').value = '';
-                    document.getElementById('newEmail').value = '';
-                    parseAndPreviewHuawei(); // 自动重新刷新表格
-                } else {
-                    log(`❌ 映射添加失败: ${data.error}`, 'text-rose-400');
-                }
-            } catch (err) {
-                log(`❌ 请求异常: ${err.message}`, 'text-rose-400');
-            }
-        }
-
         async function triggerBroadcast() {
             log('正在解析最新数据并生成全量 Telegram 报表...', 'text-yellow-400');
             const huaweiRaw = document.getElementById('huaweiText').value;
+            const localDict = getLocalDict();
 
             try {
                 const res = await fetch('/api/broadcast', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ huawei_raw: huaweiRaw })
+                    body: JSON.stringify({ huawei_raw: huaweiRaw, hw_dict: localDict })
                 });
                 const data = await res.json();
                 if (data.success) {
@@ -397,7 +494,7 @@ HTML_TEMPLATE = """
                 const res = await fetch('/api/recall', { method: 'POST' });
                 const data = await res.json();
                 if (data.success) {
-                    log(`🚀 撤回指令已下达！后台正在删除 ${data.target_count} 条消息...`, 'text-emerald-400');
+                    log(`🚀 撤回指令已下查！后台正在物理删除 ${data.target_count} 条消息...`, 'text-emerald-400');
                 } else {
                     log(`❌ 撤回失败: ${data.error}`, 'text-rose-400');
                 }
@@ -436,27 +533,9 @@ def huawei_parse_api():
     try:
         data = request.json or {}
         raw_text = data.get("raw_text", "")
-        results = parse_huawei_multiline_text(raw_text)
+        hw_dict = data.get("hw_dict", {})
+        results = parse_huawei_multiline_text(raw_text, hw_dict)
         return jsonify({"success": True, "results": results})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
-
-
-@app.route("/api/huawei/dict", methods=["POST"])
-def add_huawei_dict():
-    try:
-        data = request.json or {}
-        hid = data.get("hid", "").strip()
-        email = data.get("email", "").strip()
-        if not hid or not email:
-            return jsonify(
-                {"success": False, "error": "HID 或邮箱不能为空！"}
-            )
-
-        dictionary = load_huawei_dict()
-        dictionary[hid] = email
-        save_huawei_dict(dictionary)
-        return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
@@ -514,13 +593,13 @@ def broadcast_api():
     try:
         req_data = request.json or {}
         huawei_raw_text = req_data.get("huawei_raw", "")
+        hw_dict = req_data.get("hw_dict", {})
 
         all_data = []
         group_map = {}
 
-        # 1. 深度处理华为复制粘贴文本
         if huawei_raw_text.strip():
-            hw_results = parse_huawei_multiline_text(huawei_raw_text)
+            hw_results = parse_huawei_multiline_text(huawei_raw_text, hw_dict)
             for r in hw_results:
                 if r["groupID"] != "未识别" and r["balance"] > 0:
                     all_data.append(
@@ -533,7 +612,6 @@ def broadcast_api():
                         }
                     )
 
-        # 2. 处理常规上传的文件 (阿里、腾讯、AWS)
         all_uploaded = glob.glob(os.path.join(UPLOAD_FOLDER, "*"))
         for f in all_uploaded:
             filename = os.path.basename(f)
