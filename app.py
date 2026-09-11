@@ -65,7 +65,6 @@ def parse_tag(tag_str):
         return None
     s = str(tag_str).strip()
 
-    # 过滤无效关键词
     invalid_keywords = ["自定义标签", "测试", "hid", "添加", "设置预算"]
     if any(k in s for k in invalid_keywords):
         return None
@@ -104,12 +103,10 @@ def parse_huawei_multiline_text(raw_text, hw_dict):
             continue
         hid = hid_match.group(1).strip()
 
-        # 1. 提取标签 (如 C00897-CDN, C01006-NICK)
         tag_match = re.search(r"(C\d{4,5}[-\w]*)", block)
         tag = tag_match.group(1) if tag_match else ""
         gid = parse_tag(tag) if tag else None
 
-        # 核心过滤：如果未匹配到有效 GroupID (比如是测试、自定义标签)，直接过滤掉！
         if not gid:
             continue
 
@@ -123,7 +120,6 @@ def parse_huawei_multiline_text(raw_text, hw_dict):
 
         calc_balance = budget * (1.0 - usage_rate) if usage_rate <= 1.0 else 0.0
 
-        # 核心过滤 2：剔除余额为 0 的记录
         if round(calc_balance, 2) <= 0:
             continue
 
@@ -444,7 +440,7 @@ HTML_TEMPLATE = """
                     const tbody = document.getElementById('hwTableBody');
                     tbody.innerHTML = '';
                     data.results.forEach(r => {
-                        const isUnknown = r.email.startswith ? r.email.startswith('hid_') : r.email.includes('hid_');
+                        const isUnknown = r.email.startsWith ? r.email.startsWith('hid_') : r.email.includes('hid_');
                         const emailHtml = isUnknown 
                             ? `<span class="text-rose-600 font-bold">${r.email} (未绑定)</span>`
                             : `<span class="text-emerald-700 font-medium">${r.email}</span>`;
