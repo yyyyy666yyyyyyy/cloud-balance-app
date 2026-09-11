@@ -28,7 +28,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
 # ---------------------------------------------------------
-# 工具函数：数据持久化
+# 持久化工具函数
 # ---------------------------------------------------------
 def load_huawei_dict():
     if os.path.exists(HUAWEI_DICT_FILE):
@@ -82,6 +82,83 @@ def clear_sent_history():
             pass
 
 
+def parse_tag(tag_str):
+    if pd.isna(tag_str):
+        return None
+    s = str(tag_str).strip()
+    if s.startswith("DJ-"):
+        s = s[3:]
+    elif s.startswith("DJ"):
+        s = s[2:]
+    parts = s.split("-")
+    gid = parts[0].strip()
+    if gid.startswith("C") and len(gid) >= 5:
+        return gid
+    return None
+
+
+def clean_num(val):
+    if pd.isna(val):
+        return 0.0
+    s = str(val).replace("$", "").replace(",", "").replace("'", "").strip()
+    try:
+        return float(s)
+    except:
+        return 0.0
+
+
+# 深度解析华为乱序多行文本
+def parse_huawei_multiline_text(raw_text):
+    hw_dict = load_huawei_dict()
+    parsed_results = []
+
+    # 按客户数据块切割（以 H****D 或 hid_ 为锚点）
+    blocks = re.split(r"(?=hid_)", raw_text)
+
+    for block in blocks:
+        if not block.strip() or "hid_" not in block:
+            continue
+
+        # 1. 提取 HID
+        hid_match = re.search(r"(hid_[a-zA-Z0-9_]+)", block)
+        if not hid_match:
+            continue
+        hid = hid_match.group(1)
+
+        # 2. 提取百分比使用率 (如 30.02% 或 0%)
+        rate_match = re.search(r"(\d+(?:\.\d+)?)\s*%", block)
+        usage_rate = float(rate_match.group(1)) / 100.0 if rate_match else 0.0
+
+        # 3. 提取所有浮点数/数字，筛选一次性预算 (紧接着百分比前面的数字，或者最大的合理数值)
+        numbers = re.findall(r"[\d,]+\.\d{2}", block)
+        budget = 0.0
+        if numbers:
+            budget = max([clean_num(n) for n in numbers])
+
+        # 4. 提取标签 (如 C00897-CDN, C01006-NICK)
+        tag_match = re.search(r"(C\d{4,5}[-\w]*)", block)
+        tag = tag_match.group(1) if tag_match else ""
+        gid = parse_tag(tag) if tag else None
+
+        # 映射邮箱与计算余额
+        email = hw_dict.get(hid, hid)
+        calc_balance = budget * (1.0 - usage_rate) if usage_rate <= 1.0 else 0.0
+
+        parsed_results.append(
+            {
+                "hid": hid,
+                "email": email,
+                "budget": budget,
+                "rate_percent": f"{usage_rate * 100:.2f}%",
+                "balance": round(calc_balance, 2),
+                "tag": tag,
+                "groupID": gid or "未识别",
+            }
+        )
+
+    return parsed_results
+
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -96,10 +173,10 @@ HTML_TEMPLATE = """
         <header class="border-b pb-4 mb-6 flex justify-between items-center">
             <div>
                 <h1 class="text-2xl font-bold text-slate-800">多云余额自动化管理控制台</h1>
-                <p class="text-sm text-slate-500 mt-1">云端轻量级 Web App | 华为云快捷粘贴与 100% 物理撤回</p>
+                <p class="text-sm text-slate-500 mt-1">云端轻量级 Web App | 华为数据解析预览与 Telegram 撤回</p>
             </div>
             <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
-                🟢 服务运行中
+                🟢 云端服务运行中
             </span>
         </header>
 
@@ -113,23 +190,47 @@ HTML_TEMPLATE = """
             <p id="fileCount" class="text-xs text-indigo-600 mt-2">支持多选 CSV / XLSX 同时上传</p>
         </div>
 
-        <!-- 2. 华为云专用粘贴 & 映射配置专区 -->
+        <!-- 2. 华为云专用粘贴 & 映射预览专区 -->
         <div class="mb-6 border border-orange-200 rounded-xl p-5 bg-orange-50/30">
-            <h3 class="text-orange-900 font-semibold mb-2 flex items-center gap-2">
-                <span>⚡ 华为云专区（直接复制粘贴拉取到的数据）</span>
+            <h3 class="text-orange-900 font-semibold mb-2 flex justify-between items-center">
+                <span>⚡ 华为云专区（直接复制粘贴页面数据）</span>
+                <button onclick="parseAndPreviewHuawei()" class="bg-orange-600 hover:bg-orange-700 text-white text-xs font-medium px-4 py-1.5 rounded transition shadow">
+                    🔍 解析并预览华为数据
+                </button>
             </h3>
-            <p class="text-xs text-orange-700 mb-3">将你拉取到的华为数据表格直接复制粘贴到下方框内（系统会自动抓取 HID、预算、使用率与标签，并自动套用公式计算余额）：</p>
             
-            <textarea id="huaweiText" rows="4" placeholder="在此粘贴华为拉取的表格数据... 例如:&#10;hid_zn95r7sct0e_89c    1000    0.2    C00961-YXD4" class="w-full p-3 border rounded-lg font-mono text-xs text-slate-700 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-white mb-3"></textarea>
+            <textarea id="huaweiText" rows="4" placeholder="直接全选粘贴从华为拉取出来的整块错位数据..." class="w-full p-3 border rounded-lg font-mono text-xs text-slate-700 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-white mb-3"></textarea>
             
+            <!-- 华为解析预览表格 (默认隐藏，点击解析后展示) -->
+            <div id="huaweiPreviewArea" class="hidden mb-4 border rounded-lg bg-white overflow-hidden shadow-sm">
+                <div class="bg-orange-100 px-4 py-2 border-b flex justify-between items-center">
+                    <span class="text-xs font-bold text-orange-900">📊 华为云解析结果人工核查 (发前预览)</span>
+                    <span id="hwParsedCount" class="text-xs text-orange-700"></span>
+                </div>
+                <div class="max-h-60 overflow-y-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-50 text-slate-600 border-b">
+                            <tr>
+                                <th class="p-2.5">HID</th>
+                                <th class="p-2.5">映射邮箱/账号</th>
+                                <th class="p-2.5">预算</th>
+                                <th class="p-2.5">使用率</th>
+                                <th class="p-2.5">自动算得余额</th>
+                                <th class="p-2.5">提取 GroupID</th>
+                            </tr>
+                        </thead>
+                        <tbody id="hwTableBody" class="divide-y text-slate-700"></tbody>
+                    </table>
+                </div>
+            </div>
+
             <!-- 快速加新的 HID 字典映射 -->
             <div class="flex gap-2 items-center bg-white p-3 border rounded-lg">
-                <span class="text-xs font-medium text-slate-600">➕ 快速新增 HID 映射:</span>
+                <span class="text-xs font-medium text-slate-600">➕ 补全未识别 HID 映射:</span>
                 <input type="text" id="newHid" placeholder="HID (如 hid_xxx)" class="border rounded px-2 py-1 text-xs flex-1">
                 <input type="text" id="newEmail" placeholder="真实邮箱 (如 user@abc.com)" class="border rounded px-2 py-1 text-xs flex-1">
-                <button onclick="addHidMapping()" class="bg-orange-600 hover:bg-orange-700 text-white text-xs font-medium px-4 py-1.5 rounded transition">保存映射</button>
+                <button onclick="addHidMapping()" class="bg-orange-600 hover:bg-orange-700 text-white text-xs font-medium px-4 py-1.5 rounded transition">保存并更新预览</button>
             </div>
-            <p id="huaweiStatus" class="text-xs text-slate-500 mt-2"></p>
         </div>
 
         <!-- 3. 操作控制按钮组 -->
@@ -146,7 +247,7 @@ HTML_TEMPLATE = """
         </div>
 
         <!-- 4. 实时日志输出框 -->
-        <div class="border rounded-lg p-4 bg-slate-900 text-slate-100 font-mono text-sm min-h-[260px] max-h-[460px] overflow-y-auto" id="logBox">
+        <div class="border rounded-lg p-4 bg-slate-900 text-slate-100 font-mono text-sm min-h-[240px] max-h-[440px] overflow-y-auto" id="logBox">
             <p class="text-slate-400">> 系统就绪，请上传文件或粘贴华为数据...</p>
         </div>
     </div>
@@ -182,6 +283,52 @@ HTML_TEMPLATE = """
             }
         }
 
+        async function parseAndPreviewHuawei() {
+            const text = document.getElementById('huaweiText').value;
+            if (!text.trim()) {
+                alert('请先将华为页面拉取到的表格数据粘贴进输入框！');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/huawei/parse', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ raw_text: text })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    const tbody = document.getElementById('hwTableBody');
+                    tbody.innerHTML = '';
+                    data.results.forEach(r => {
+                        const isUnknown = r.email.startsWith('hid_');
+                        const emailHtml = isUnknown 
+                            ? `<span class="text-rose-600 font-bold">${r.email} (未绑定)</span>`
+                            : `<span class="text-emerald-700 font-medium">${r.email}</span>`;
+
+                        tbody.innerHTML += `
+                            <tr>
+                                <td class="p-2.5 font-mono text-slate-500">${r.hid}</td>
+                                <td class="p-2.5">${emailHtml}</td>
+                                <td class="p-2.5 font-mono">$${r.budget}</td>
+                                <td class="p-2.5 font-mono">${r.rate_percent}</td>
+                                <td class="p-2.5 font-mono text-emerald-600 font-bold">$${r.balance}</td>
+                                <td class="p-2.5"><span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">${r.groupID}</span></td>
+                            </tr>
+                        `;
+                    });
+
+                    document.getElementById('hwParsedCount').innerText = `成功识别出 ${data.results.length} 条账号记录`;
+                    document.getElementById('huaweiPreviewArea').classList.remove('hidden');
+                    log(`✅ 华为数据解析完成！已生成下方 ${data.results.length} 条预览表格供核对。`, 'text-orange-300');
+                } else {
+                    log(`❌ 解析失败: ${data.error}`, 'text-rose-400');
+                }
+            } catch (err) {
+                log(`❌ 请求异常: ${err.message}`, 'text-rose-400');
+            }
+        }
+
         async function addHidMapping() {
             const hid = document.getElementById('newHid').value.trim();
             const email = document.getElementById('newEmail').value.trim();
@@ -201,6 +348,7 @@ HTML_TEMPLATE = """
                     log(`✅ 华为映射添加成功: ${hid} ➔ ${email}`, 'text-orange-300');
                     document.getElementById('newHid').value = '';
                     document.getElementById('newEmail').value = '';
+                    parseAndPreviewHuawei(); // 自动重新刷新表格
                 } else {
                     log(`❌ 映射添加失败: ${data.error}`, 'text-rose-400');
                 }
@@ -211,7 +359,6 @@ HTML_TEMPLATE = """
 
         async function triggerBroadcast() {
             log('正在解析最新数据并生成全量 Telegram 报表...', 'text-yellow-400');
-
             const huaweiRaw = document.getElementById('huaweiText').value;
 
             try {
@@ -264,31 +411,6 @@ HTML_TEMPLATE = """
 """
 
 
-def parse_tag(tag_str):
-    if pd.isna(tag_str):
-        return None
-    s = str(tag_str).strip()
-    if s.startswith("DJ-"):
-        s = s[3:]
-    elif s.startswith("DJ"):
-        s = s[2:]
-    parts = s.split("-")
-    gid = parts[0].strip()
-    if gid.startswith("C") and len(gid) >= 5:
-        return gid
-    return None
-
-
-def clean_num(val):
-    if pd.isna(val):
-        return 0.0
-    s = str(val).replace("$", "").replace(",", "").replace("'", "").strip()
-    try:
-        return float(s)
-    except:
-        return 0.0
-
-
 @app.route("/")
 def index():
     return render_template_string(HTML_TEMPLATE)
@@ -305,6 +427,17 @@ def upload_files():
                 file.save(file_path)
                 count += 1
         return jsonify({"success": True, "uploaded_count": count})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/huawei/parse", methods=["POST"])
+def huawei_parse_api():
+    try:
+        data = request.json or {}
+        raw_text = data.get("raw_text", "")
+        results = parse_huawei_multiline_text(raw_text)
+        return jsonify({"success": True, "results": results})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
@@ -384,53 +517,23 @@ def broadcast_api():
 
         all_data = []
         group_map = {}
-        hw_dict = load_huawei_dict()
 
-        # 读取可能存在的 groupcn 模板
-        template_files = glob.glob(os.path.join(UPLOAD_FOLDER, "*余额模板*.xlsx"))
-        if template_files:
-            try:
-                groupcn = pd.read_excel(
-                    template_files[0], sheet_name="groupcn", engine="openpyxl"
-                )
-                group_map = dict(
-                    zip(
-                        groupcn["groupID"].astype(str).str.strip(),
-                        groupcn["chname"].astype(str).str.strip(),
-                    )
-                )
-            except:
-                pass
-
-        # 1. 处理复制粘贴进来的华为文本数据
+        # 1. 深度处理华为复制粘贴文本
         if huawei_raw_text.strip():
-            lines = huawei_raw_text.strip().split("\n")
-            for line in lines:
-                parts = re.split(r"\s+", line.strip())
-                if len(parts) >= 3:
-                    # 尝试匹配字符串中的 HID、数字和标签
-                    hid_candidate = parts[0]
-                    num1 = clean_num(parts[1])  # 预算
-                    num2 = clean_num(parts[2])  # 使用率
-                    tag_candidate = parts[3] if len(parts) >= 4 else ""
+            hw_results = parse_huawei_multiline_text(huawei_raw_text)
+            for r in hw_results:
+                if r["groupID"] != "未识别" and r["balance"] > 0:
+                    all_data.append(
+                        {
+                            "account": r["email"],
+                            "balance": r["balance"],
+                            "groupID": r["groupID"],
+                            "usage": 0.0,
+                            "cloud_type": "华为余额",
+                        }
+                    )
 
-                    if "hid_" in hid_candidate or "hid" in hid_candidate:
-                        acc_email = hw_dict.get(hid_candidate, hid_candidate)
-                        calc_balance = num1 * (1.0 - num2) if num2 <= 1.0 else 0.0
-                        gid = parse_tag(tag_candidate)
-
-                        if gid and calc_balance > 0:
-                            all_data.append(
-                                {
-                                    "account": acc_email,
-                                    "balance": calc_balance,
-                                    "groupID": gid,
-                                    "usage": 0.0,
-                                    "cloud_type": "华为余额",
-                                }
-                            )
-
-        # 2. 处理常规上传的文件
+        # 2. 处理常规上传的文件 (阿里、腾讯、AWS)
         all_uploaded = glob.glob(os.path.join(UPLOAD_FOLDER, "*"))
         for f in all_uploaded:
             filename = os.path.basename(f)
@@ -553,7 +656,7 @@ def broadcast_api():
             return jsonify(
                 {
                     "success": False,
-                    "error": "未能解析到任何有效数据，请上传 CSV 或在华为专区粘贴数据！",
+                    "error": "未能解析到任何有效数据，请检查上传的文件或粘贴的华为数据！",
                 }
             )
 
