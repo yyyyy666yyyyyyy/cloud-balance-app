@@ -28,7 +28,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
 # ---------------------------------------------------------
-# 云端持久化函数 (JSON 文件存储，保证更新/重启绝对不丢数据)
+# 云端持久化函数 (保证更新与重启字典绝对不丢)
 # ---------------------------------------------------------
 def load_huawei_dict():
     if os.path.exists(HUAWEI_DICT_FILE):
@@ -162,7 +162,7 @@ def parse_huawei_multiline_text(raw_text, hw_dict):
     return parsed_results
 
 
-# 独立出的纯 JavaScript 脚本（绝对防语法冲突）
+# 彻底清理掉一切 Emoji 表情与乱码隐患的原生 JS 脚本
 JS_SCRIPT = """
 function switchTab(tabName) {
     var tabs = ['dashboard', 'huawei', 'dictionary'];
@@ -214,7 +214,7 @@ function renderDictTable(dict) {
     var keys = Object.keys(dict || {});
 
     if (keys.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" class="p-4 text-center text-slate-400">暂无任何 HID 映射，请在上方粘贴批量导入！</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="3" class="p-4 text-center text-slate-400">No HID mapping data found. Please paste and import above.</td></tr>';
         return;
     }
 
@@ -231,7 +231,7 @@ function renderDictTable(dict) {
 function importBatchDict() {
     var text = document.getElementById('batchDictText').value;
     if (!text || !text.trim()) {
-        alert('请先粘贴包含 HID 和 邮箱 的表格数据！');
+        alert('Please paste table data containing HID and Email!');
         return;
     }
 
@@ -244,9 +244,9 @@ function importBatchDict() {
             if (data.success) {
                 document.getElementById('batchDictText').value = '';
                 renderDictTable(data.dict);
-                alert('🎉 成功批量保存了 ' + data.count + ' 条 HID 映射字典！');
+                alert('Successfully saved ' + data.count + ' HID mappings!');
             } else {
-                alert('❌ 保存失败: ' + data.error);
+                alert('Save failed: ' + data.error);
             }
         }
     };
@@ -267,7 +267,7 @@ function deleteDictKey(key) {
 }
 
 function clearAllDict() {
-    if (confirm('确认清空所有 HID 映射词典吗？')) {
+    if (confirm('Are you sure you want to clear all HID dictionary mappings?')) {
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/huawei/dict/clear', true);
         xhr.onload = function() {
@@ -284,7 +284,7 @@ function handleFileSelect(event) {
     var files = event.target.files;
     if (files.length === 0) return;
 
-    document.getElementById('fileCount').innerText = '已选择 ' + files.length + ' 个文件，正在上传...';
+    document.getElementById('fileCount').innerText = 'Selected ' + files.length + ' files, uploading...';
     var formData = new FormData();
     for (var i = 0; i < files.length; i++) {
         formData.append('files', files[i]);
@@ -296,10 +296,10 @@ function handleFileSelect(event) {
         if (xhr.status === 200) {
             var data = JSON.parse(xhr.responseText);
             if (data.success) {
-                log('✅ 成功上传并更新了 ' + data.uploaded_count + ' 个账单文件！', 'text-emerald-400');
-                document.getElementById('fileCount').innerText = '已成功接收 ' + data.uploaded_count + ' 个最新数据文件。';
+                log('Uploaded ' + data.uploaded_count + ' bill files!', 'text-emerald-400');
+                document.getElementById('fileCount').innerText = 'Successfully received ' + data.uploaded_count + ' files.';
             } else {
-                log('❌ 上传失败: ' + data.error, 'text-rose-400');
+                log('Upload failed: ' + data.error, 'text-rose-400');
             }
         }
     };
@@ -309,7 +309,7 @@ function handleFileSelect(event) {
 function parseAndPreviewHuawei() {
     var text = document.getElementById('huaweiText').value;
     if (!text.trim()) {
-        alert('请先在文本框里粘贴华为拉取的数据！');
+        alert('Please paste Huawei data into the text box first!');
         return;
     }
 
@@ -326,7 +326,7 @@ function parseAndPreviewHuawei() {
                     var r = data.results[i];
                     var isUnknown = r.email.indexOf('hid_') !== -1;
                     var emailHtml = isUnknown 
-                        ? '<span class="text-rose-600 font-bold">' + r.email + ' (未绑定)</span>'
+                        ? '<span class="text-rose-600 font-bold">' + r.email + ' (Unbound)</span>'
                         : '<span class="text-emerald-700 font-medium">' + r.email + '</span>';
 
                     var tr = document.createElement('tr');
@@ -339,11 +339,11 @@ function parseAndPreviewHuawei() {
                     tbody.appendChild(tr);
                 }
 
-                document.getElementById('hwParsedCount').innerText = '共筛出 ' + data.results.length + ' 条有效记录';
+                document.getElementById('hwParsedCount').innerText = 'Extracted ' + data.results.length + ' valid records';
                 document.getElementById('huaweiPreviewArea').classList.remove('hidden');
-                log('✅ 华为数据解析完成！已剔除非客户标签和0余额数据，剩余 ' + data.results.length + ' 条真实有效记录。', 'text-orange-300');
+                log('Huawei parsing complete! Filtered invalid tags and 0 balance records, ' + data.results.length + ' valid records remaining.', 'text-orange-300');
             } else {
-                log('❌ 解析失败: ' + data.error, 'text-rose-400');
+                log('Parse failed: ' + data.error, 'text-rose-400');
             }
         }
     };
@@ -351,7 +351,7 @@ function parseAndPreviewHuawei() {
 }
 
 function triggerBroadcast() {
-    log('正在解析最新数据并生成全量 Telegram 报表...', 'text-yellow-400');
+    log('Parsing data and sending Telegram broadcast...', 'text-yellow-400');
     var huaweiRaw = document.getElementById('huaweiText').value;
 
     var xhr = new XMLHttpRequest();
@@ -361,12 +361,12 @@ function triggerBroadcast() {
         if (xhr.status === 200) {
             var data = JSON.parse(xhr.responseText);
             if (data.success) {
-                log('🎉 播报完成！共成功推送了 ' + data.total_groups + ' 个群组。', 'text-emerald-400');
+                log('Broadcast complete! Successfully sent to ' + data.total_groups + ' groups.', 'text-emerald-400');
                 if (data.logs) {
                     for (var i = 0; i < data.logs.length; i++) { log(data.logs[i]); }
                 }
             } else {
-                log('❌ 播报失败: ' + data.error, 'text-rose-400');
+                log('Broadcast failed: ' + data.error, 'text-rose-400');
             }
         }
     };
@@ -374,7 +374,7 @@ function triggerBroadcast() {
 }
 
 function stopBroadcast() {
-    log('⚠️ 正在向后台发送中断指令...', 'text-amber-400');
+    log('Sending stop command to server...', 'text-amber-400');
     var xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/stop', true);
     xhr.onload = function() {
@@ -387,17 +387,17 @@ function stopBroadcast() {
 }
 
 function recallBroadcast() {
-    if (!confirm('确定要撤回刚才发送的所有 Telegram 消息吗？')) return;
-    log('🔄 正在请求后台物理撤回群组消息...', 'text-rose-300');
+    if (!confirm('Are you sure you want to recall all sent Telegram messages?')) return;
+    log('Requesting server to recall messages...', 'text-rose-300');
     var xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/recall', true);
     xhr.onload = function() {
         if (xhr.status === 200) {
             var data = JSON.parse(xhr.responseText);
             if (data.success) {
-                log('🚀 撤回指令已下达！后台正在删除 ' + data.target_count + ' 条消息...', 'text-emerald-400');
+                log('Recall command issued! Deleting ' + data.target_count + ' messages...', 'text-emerald-400');
             } else {
-                log('❌ 撤回失败: ' + data.error, 'text-rose-400');
+                log('Recall failed: ' + data.error, 'text-rose-400');
             }
         }
     };
@@ -576,7 +576,10 @@ def index():
 
 @app.route("/static/script.js")
 def serve_script():
-    return Response(JS_SCRIPT, mimetype="application/javascript")
+    # 强制设置字符集为 UTF-8，彻底防止非法字符报错！
+    return Response(
+        JS_SCRIPT, mimetype="application/javascript", charset="utf-8"
+    )
 
 
 @app.route("/api/upload", methods=["POST"])
