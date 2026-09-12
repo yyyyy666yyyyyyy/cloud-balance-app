@@ -28,7 +28,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
 # ---------------------------------------------------------
-# 云端持久化函数 (保证更新与重启字典绝对不丢)
+# 持久化工具函数
 # ---------------------------------------------------------
 def load_huawei_dict():
     if os.path.exists(HUAWEI_DICT_FILE):
@@ -162,7 +162,6 @@ def parse_huawei_multiline_text(raw_text, hw_dict):
     return parsed_results
 
 
-# 彻底清理掉一切 Emoji 表情与乱码隐患的原生 JS 脚本
 JS_SCRIPT = """
 function switchTab(tabName) {
     var tabs = ['dashboard', 'huawei', 'dictionary'];
@@ -395,7 +394,7 @@ function recallBroadcast() {
         if (xhr.status === 200) {
             var data = JSON.parse(xhr.responseText);
             if (data.success) {
-                log('Recall command issued! Deleting ' + data.target_count + ' messages...', 'text-emerald-400');
+                log('Recall command issued! Deleting ' + data.target_count + ' messages...', 'text-rose-400');
             } else {
                 log('Recall failed: ' + data.error, 'text-rose-400');
             }
@@ -574,11 +573,11 @@ def index():
     return render_template_string(HTML_TEMPLATE)
 
 
+# 修复 Flask Response，移除引起 500 崩溃的 charset 参数！
 @app.route("/static/script.js")
 def serve_script():
-    # 强制设置字符集为 UTF-8，彻底防止非法字符报错！
     return Response(
-        JS_SCRIPT, mimetype="application/javascript", charset="utf-8"
+        JS_SCRIPT, mimetype="application/javascript; charset=utf-8"
     )
 
 
