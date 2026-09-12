@@ -162,8 +162,7 @@ def parse_huawei_multiline_text(raw_text, hw_dict):
     return parsed_results
 
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
+HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -187,7 +186,9 @@ HTML_TEMPLATE = """
             if (activeEl) activeEl.classList.remove('hidden');
             if (activeBtn) activeBtn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-indigo-600 text-white transition";
 
-            if (tabName === 'dictionary') loadServerDict();
+            if (tabName === 'dictionary') {
+                loadServerDict();
+            }
         }
 
         function log(msg, color) {
@@ -200,14 +201,17 @@ HTML_TEMPLATE = """
         }
 
         function loadServerDict() {
-            fetch('/api/huawei/dict/list')
-                .then(function(res) { return res.json(); })
-                .then(function(data) {
+            var xhr = new XMLHttpRequest();
+            xhr.open("GET", "/api/huawei/dict/list", true);
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    var data = JSON.parse(xhr.responseText);
                     if (data.success) {
                         renderDictTable(data.dict);
                     }
-                })
-                .catch(function(err) { console.error("加载字典失败", err); });
+                }
+            };
+            xhr.send();
         }
 
         function renderDictTable(dict) {
@@ -238,45 +242,48 @@ HTML_TEMPLATE = """
                 return;
             }
 
-            fetch('/api/huawei/dict/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ raw_text: text })
-            })
-            .then(function(res) { return res.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    document.getElementById('batchDictText').value = '';
-                    renderDictTable(data.dict);
-                    alert('🎉 成功批量保存了 ' + data.count + ' 条 HID 映射字典！');
-                } else {
-                    alert('❌ 保存失败: ' + data.error);
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "/api/huawei/dict/import", true);
+            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    var data = JSON.parse(xhr.responseText);
+                    if (data.success) {
+                        document.getElementById('batchDictText').value = '';
+                        renderDictTable(data.dict);
+                        alert('🎉 成功批量保存了 ' + data.count + ' 条 HID 映射字典！');
+                    } else {
+                        alert('❌ 保存失败: ' + data.error);
+                    }
                 }
-            })
-            .catch(function(err) { alert('❌ 请求异常: ' + err.message); });
+            };
+            xhr.send(JSON.stringify({ raw_text: text }));
         }
 
         function deleteDictKey(key) {
-            fetch('/api/huawei/dict/delete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: key })
-            })
-            .then(function(res) { return res.json(); })
-            .then(function(data) {
-                if (data.success) { renderDictTable(data.dict); }
-            })
-            .catch(function(err) { alert('删除失败'); });
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "/api/huawei/dict/delete", true);
+            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    var data = JSON.parse(xhr.responseText);
+                    if (data.success) { renderDictTable(data.dict); }
+                }
+            };
+            xhr.send(JSON.stringify({ key: key }));
         }
 
         function clearAllDict() {
             if (confirm('确认清空所有 HID 映射词典吗？')) {
-                fetch('/api/huawei/dict/clear', { method: 'POST' })
-                    .then(function(res) { return res.json(); })
-                    .then(function(data) {
+                var xhr = new XMLHttpRequest();
+                xhr.open("POST", "/api/huawei/dict/clear", true);
+                xhr.onload = function() {
+                    if (xhr.status === 200) {
+                        var data = JSON.parse(xhr.responseText);
                         if (data.success) { renderDictTable({}); }
-                    })
-                    .catch(function(err) { alert('清空失败'); });
+                    }
+                };
+                xhr.send();
             }
         }
 
@@ -290,17 +297,20 @@ HTML_TEMPLATE = """
                 formData.append('files', files[i]);
             }
 
-            fetch('/api/upload', { method: 'POST', body: formData })
-                .then(function(res) { return res.json(); })
-                .then(function(data) {
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "/api/upload", true);
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    var data = JSON.parse(xhr.responseText);
                     if (data.success) {
                         log('✅ 成功上传并更新了 ' + data.uploaded_count + ' 个账单文件！', 'text-emerald-400');
                         document.getElementById('fileCount').innerText = '已成功接收 ' + data.uploaded_count + ' 个最新数据文件。';
                     } else {
                         log('❌ 上传失败: ' + data.error, 'text-rose-400');
                     }
-                })
-                .catch(function(err) { log('❌ 上传异常: ' + err.message, 'text-rose-400'); });
+                }
+            };
+            xhr.send(formData);
         }
 
         function parseAndPreviewHuawei() {
@@ -310,87 +320,95 @@ HTML_TEMPLATE = """
                 return;
             }
 
-            fetch('/api/huawei/parse', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ raw_text: text })
-            })
-            .then(function(res) { return res.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    var tbody = document.getElementById('hwTableBody');
-                    tbody.innerHTML = '';
-                    for (var i = 0; i < data.results.length; i++) {
-                        var r = data.results[i];
-                        var isUnknown = r.email.indexOf('hid_') !== -1;
-                        var emailHtml = isUnknown 
-                            ? '<span class="text-rose-600 font-bold">' + r.email + ' (未绑定)</span>'
-                            : '<span class="text-emerald-700 font-medium">' + r.email + '</span>';
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "/api/huawei/parse", true);
+            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    var data = JSON.parse(xhr.responseText);
+                    if (data.success) {
+                        var tbody = document.getElementById('hwTableBody');
+                        tbody.innerHTML = '';
+                        for (var i = 0; i < data.results.length; i++) {
+                            var r = data.results[i];
+                            var isUnknown = r.email.indexOf('hid_') !== -1;
+                            var emailHtml = isUnknown 
+                                ? '<span class="text-rose-600 font-bold">' + r.email + ' (未绑定)</span>'
+                                : '<span class="text-emerald-700 font-medium">' + r.email + '</span>';
 
-                        var tr = document.createElement('tr');
-                        tr.innerHTML = '<td class="p-3 font-mono text-slate-500">' + r.hid + '</td>' +
-                            '<td class="p-3">' + emailHtml + '</td>' +
-                            '<td class="p-3 font-mono">$' + r.budget + '</td>' +
-                            '<td class="p-3 font-mono">' + r.rate_percent + '</td>' +
-                            '<td class="p-3 font-mono text-emerald-600 font-bold">$' + r.balance + '</td>' +
-                            '<td class="p-3"><span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-semibold">' + r.groupID + '</span></td>';
-                        tbody.appendChild(tr);
+                            var tr = document.createElement('tr');
+                            tr.innerHTML = '<td class="p-3 font-mono text-slate-500">' + r.hid + '</td>' +
+                                '<td class="p-3">' + emailHtml + '</td>' +
+                                '<td class="p-3 font-mono">$' + r.budget + '</td>' +
+                                '<td class="p-3 font-mono">' + r.rate_percent + '</td>' +
+                                '<td class="p-3 font-mono text-emerald-600 font-bold">$' + r.balance + '</td>' +
+                                '<td class="p-3"><span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-semibold">' + r.groupID + '</span></td>';
+                            tbody.appendChild(tr);
+                        }
+
+                        document.getElementById('hwParsedCount').innerText = '共筛出 ' + data.results.length + ' 条有效记录';
+                        document.getElementById('huaweiPreviewArea').classList.remove('hidden');
+                        log('✅ 华为数据解析完成！已剔除非客户标签和0余额数据，剩余 ' + data.results.length + ' 条真实有效记录。', 'text-orange-300');
+                    } else {
+                        log('❌ 解析失败: ' + data.error, 'text-rose-400');
                     }
-
-                    document.getElementById('hwParsedCount').innerText = '共筛出 ' + data.results.length + ' 条有效记录';
-                    document.getElementById('huaweiPreviewArea').classList.remove('hidden');
-                    log('✅ 华为数据解析完成！已剔除非客户标签和0余额数据，剩余 ' + data.results.length + ' 条真实有效记录。', 'text-orange-300');
-                } else {
-                    log('❌ 解析失败: ' + data.error, 'text-rose-400');
                 }
-            })
-            .catch(function(err) { log('❌ 请求异常: ' + err.message, 'text-rose-400'); });
+            };
+            xhr.send(JSON.stringify({ raw_text: text }));
         }
 
         function triggerBroadcast() {
             log('正在解析最新数据并生成全量 Telegram 报表...', 'text-yellow-400');
             var huaweiRaw = document.getElementById('huaweiText').value;
 
-            fetch('/api/broadcast', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ huawei_raw: huaweiRaw })
-            })
-            .then(function(res) { return res.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    log('🎉 播报完成！共成功推送了 ' + data.total_groups + ' 个群组。', 'text-emerald-400');
-                    if (data.logs) {
-                        for (var i = 0; i < data.logs.length; i++) { log(data.logs[i]); }
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "/api/broadcast", true);
+            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    var data = JSON.parse(xhr.responseText);
+                    if (data.success) {
+                        log('🎉 播报完成！共成功推送了 ' + data.total_groups + ' 个群组。', 'text-emerald-400');
+                        if (data.logs) {
+                            for (var i = 0; i < data.logs.length; i++) { log(data.logs[i]); }
+                        }
+                    } else {
+                        log('❌ 播报失败: ' + data.error, 'text-rose-400');
                     }
-                } else {
-                    log('❌ 播报失败: ' + data.error, 'text-rose-400');
                 }
-            })
-            .catch(function(err) { log('❌ 请求异常: ' + err.message, 'text-rose-400'); });
+            };
+            xhr.send(JSON.stringify({ huawei_raw: huaweiRaw }));
         }
 
         function stopBroadcast() {
             log('⚠️ 正在向后台发送中断指令...', 'text-amber-400');
-            fetch('/api/stop', { method: 'POST' })
-                .then(function(res) { return res.json(); })
-                .then(function(data) { log(data.message, 'text-amber-300'); })
-                .catch(function(err) { log('❌ 停止请求失败: ' + err.message, 'text-rose-400'); });
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "/api/stop", true);
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    var data = JSON.parse(xhr.responseText);
+                    log(data.message, 'text-amber-300');
+                }
+            };
+            xhr.send();
         }
 
         function recallBroadcast() {
             if (!confirm('确定要撤回刚才发送的所有 Telegram 消息吗？')) return;
             log('🔄 正在请求后台物理撤回群组消息...', 'text-rose-300');
-            fetch('/api/recall', { method: 'POST' })
-                .then(function(res) { return res.json(); })
-                .then(function(data) {
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "/api/recall", true);
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    var data = JSON.parse(xhr.responseText);
                     if (data.success) {
                         log('🚀 撤回指令已下达！后台正在删除 ' + data.target_count + ' 条消息...', 'text-emerald-400');
                     } else {
                         log('❌ 撤回失败: ' + data.error, 'text-rose-400');
                     }
-                })
-                .catch(function(err) { log('❌ 撤回异常: ' + err.message, 'text-rose-400'); });
+                }
+            };
+            xhr.send();
         }
     </script>
 </head>
