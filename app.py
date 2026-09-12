@@ -8,7 +8,8 @@ import traceback
 import warnings
 import pandas as pd
 import requests
-from flask import Flask, jsonify, render_template_string, request
+from datetime import datetime
+from flask import Flask, jsonify, render_template_string, request, make_response
 
 warnings.filterwarnings("ignore")
 
@@ -20,10 +21,62 @@ BOT_TOKEN = os.environ.get(
 CHAT_ID = os.environ.get("CHAT_ID", "-1004291395114")
 
 UPLOAD_FOLDER = "uploads"
+SNAPSHOT_FOLDER = "snapshots"
 HISTORY_FILE = "sent_history.json"
 CANCEL_FILE = "cancel_signal.flag"
+HUAWEI_DICT_FILE = "huawei_dict.json"
+AWS_GCP_DICT_FILE = "aws_gcp_dict.json"
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(SNAPSHOT_FOLDER, exist_ok=True)
+
+
+# ---------------------------------------------------------
+# 数据持久化与快照存储工具
+# ---------------------------------------------------------
+def load_huawei_dict():
+    if os.path.exists(HUAWEI_DICT_FILE):
+        try:
+            with open(HUAWEI_DICT_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+
+def save_huawei_dict(dictionary):
+    try:
+        with open(HUAWEI_DICT_FILE, "w", encoding="utf-8") as f:
+            json.dump(dictionary, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving huawei dict: {e}")
+
+
+def load_aws_gcp_dict():
+    if os.path.exists(AWS_GCP_DICT_FILE):
+        try:
+            with open(AWS_GCP_DICT_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+
+def save_aws_gcp_dict(dictionary):
+    try:
+        with open(AWS_GCP_DICT_FILE, "w", encoding="utf-8") as f:
+            json.dump(dictionary, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving aws/gcp dict: {e}")
+
+
+def save_daily_snapshot(date_str, snapshot_data):
+    file_path = os.path.join(SNAPSHOT_FOLDER, f"{date_str}_snapshot.json")
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(snapshot_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving snapshot: {e}")
 
 
 def load_sent_history():
@@ -64,6 +117,11 @@ def parse_tag(tag_str):
     if pd.isna(tag_str):
         return None
     s = str(tag_str).strip()
+
+    invalid_keywords = ["自定义标签", "测试", "hid", "添加", "设置预算"]
+    if any(k in s for k in invalid_keywords):
+        return None
+
     if s.startswith("DJ-"):
         s = s[3:]
     elif s.startswith("DJ"):
@@ -98,6 +156,13 @@ def parse_huawei_multiline_text(raw_text, hw_dict):
             continue
         hid = hid_match.group(1).strip()
 
+        tag_match = re.search(r"(C\d{4,5}[-\w]*)", block)
+        tag = tag_match.group(1) if tag_match else ""
+        gid = parse_tag(tag) if tag else None
+
+        if not gid:
+            continue
+
         rate_match = re.search(r"(\d+(?:\.\d+)?)\s*%", block)
         usage_rate = float(rate_match.group(1)) / 100.0 if rate_match else 0.0
 
@@ -106,12 +171,12 @@ def parse_huawei_multiline_text(raw_text, hw_dict):
         if numbers:
             budget = max([clean_num(n) for n in numbers])
 
-        tag_match = re.search(r"(C\d{4,5}[-\w]*)", block)
-        tag = tag_match.group(1) if tag_match else ""
-        gid = parse_tag(tag) if tag else None
+        calc_balance = budget * (1.0 - usage_rate) if usage_rate <= 1.0 else 0.0
+
+        if round(calc_balance, 2) <= 0:
+            continue
 
         email = hw_dict.get(hid, hid)
-        calc_balance = budget * (1.0 - usage_rate) if usage_rate <= 1.0 else 0.0
 
         parsed_results.append(
             {
@@ -121,15 +186,327 @@ def parse_huawei_multiline_text(raw_text, hw_dict):
                 "rate_percent": f"{usage_rate * 100:.2f}%",
                 "balance": round(calc_balance, 2),
                 "tag": tag,
-                "groupID": gid or "未识别",
+                "groupID": gid,
             }
         )
 
     return parsed_results
 
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
+# ---------------------------------------------------------
+# 独立前端纯 JS 脚本 (绝对保证防语法与编码冲突)
+# ---------------------------------------------------------
+PURE_JS = """
+window.switchTab = function(tabName) {
+    var tabs = ['dashboard', 'huawei', 'aws_gcp', 'dictionary'];
+    for (var i = 0; i < tabs.length; i++) {
+        var t = tabs[i];
+        var el = document.getElementById('tab-' + t);
+        var btn = document.getElementById('nav-' + t);
+        if (el) el.classList.add('hidden');
+        if (btn) btn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition";
+    }
+
+    var activeEl = document.getElementById('tab-' + tabName);
+    var activeBtn = document.getElementById('nav-' + tabName);
+    if (activeEl) activeEl.classList.remove('hidden');
+    if (activeBtn) activeBtn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-indigo-600 text-white transition";
+
+    if (tabName === 'dictionary') {
+        window.loadServerDict();
+    } else if (tabName === 'aws_gcp') {
+        window.loadAwsGcpDict();
+    }
+};
+
+window.log = function(msg, color) {
+    color = color || 'text-slate-200';
+    var box = document.getElementById('logBox');
+    if (box) {
+        box.innerHTML += '<p class="' + color + ' mt-1">> ' + msg + '</p>';
+        box.scrollTop = box.scrollHeight;
+    }
+};
+
+window.loadServerDict = function() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/huawei/dict/list', true);
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            var data = JSON.parse(xhr.responseText);
+            if (data.success) {
+                window.renderDictTable(data.dict);
+            }
+        }
+    };
+    xhr.send();
+};
+
+window.renderDictTable = function(dict) {
+    var tbody = document.getElementById('dictTableBody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    var keys = Object.keys(dict || {});
+
+    if (keys.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="p-4 text-center text-slate-400">暂无任何 HID 映射，请在上方粘贴批量导入！</td></tr>';
+        return;
+    }
+
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td class="p-3 font-mono text-slate-600">' + k + '</td>' +
+            '<td class="p-3 font-medium text-emerald-700">' + dict[k] + '</td>' +
+            '<td class="p-3 text-right"><button onclick="window.deleteDictKey(\'' + k + '\')" class="text-rose-500 hover:text-rose-700"><i class="fa-solid fa-trash"></i></button></td>';
+        tbody.appendChild(tr);
+    }
+};
+
+window.importBatchDict = function() {
+    var text = document.getElementById('batchDictText').value;
+    if (!text || !text.trim()) {
+        alert('请先粘贴包含 HID 和 邮箱 的表格数据！');
+        return;
+    }
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/huawei/dict/import', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            var data = JSON.parse(xhr.responseText);
+            if (data.success) {
+                document.getElementById('batchDictText').value = '';
+                window.renderDictTable(data.dict);
+                alert('成功批量保存了 ' + data.count + ' 条 HID 映射字典！');
+            } else {
+                alert('保存失败: ' + data.error);
+            }
+        }
+    };
+    xhr.send(JSON.stringify({ raw_text: text }));
+};
+
+window.deleteDictKey = function(key) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/huawei/dict/delete', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            var data = JSON.parse(xhr.responseText);
+            if (data.success) { window.renderDictTable(data.dict); }
+        }
+    };
+    xhr.send(JSON.stringify({ key: key }));
+};
+
+window.clearAllDict = function() {
+    if (confirm('确认清空所有 HID 映射词典吗？')) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/huawei/dict/clear', true);
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                var data = JSON.parse(xhr.responseText);
+                if (data.success) { window.renderDictTable({}); }
+            }
+        };
+        xhr.send();
+    }
+};
+
+window.loadAwsGcpDict = function() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/aws_gcp/dict/list', true);
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            var data = JSON.parse(xhr.responseText);
+            if (data.success) {
+                window.renderAwsGcpTable(data.dict);
+            }
+        }
+    };
+    xhr.send();
+};
+
+window.renderAwsGcpTable = function(dict) {
+    var tbody = document.getElementById('awsGcpTableBody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    var keys = Object.keys(dict || {});
+
+    if (keys.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="p-4 text-center text-slate-400">暂无 AWS/GCP 绑定字典数据，请点击上方“上传主配置表格”导入。</td></tr>';
+        return;
+    }
+
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var item = dict[k];
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td class="p-3 font-semibold text-slate-700">' + (item.vendor || '通用') + '</td>' +
+            '<td class="p-3 font-mono text-slate-600">' + k + '</td>' +
+            '<td class="p-3 font-medium text-emerald-700">' + item.email + '</td>' +
+            '<td class="p-3 font-mono"><span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-semibold">' + item.group_id + '</span></td>' +
+            '<td class="p-3 font-mono text-slate-700">$' + item.credit + '</td>' +
+            '<td class="p-3 font-mono text-slate-500">$' + item.past_consumption + '</td>' +
+            '<td class="p-3 font-mono text-emerald-600 font-bold">$' + item.balance + '</td>';
+        tbody.appendChild(tr);
+    }
+};
+
+window.uploadAwsGcpExcel = function(event) {
+    var files = event.target.files;
+    if (files.length === 0) return;
+
+    var formData = new FormData();
+    formData.append('file', files[0]);
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/aws_gcp/dict/upload', true);
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            var data = JSON.parse(xhr.responseText);
+            if (data.success) {
+                window.renderAwsGcpTable(data.dict);
+                alert('成功同步导入了 ' + data.count + ' 条 AWS/GCP 账户配置与授信数据！');
+            } else {
+                alert('上传导入失败: ' + data.error);
+            }
+        }
+    };
+    xhr.send(formData);
+};
+
+window.handleFileSelect = function(event) {
+    var files = event.target.files;
+    if (files.length === 0) return;
+
+    document.getElementById('fileCount').innerText = '已选择 ' + files.length + ' 个文件，正在上传...';
+    var formData = new FormData();
+    for (var i = 0; i < files.length; i++) {
+        formData.append('files', files[i]);
+    }
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload', true);
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            var data = JSON.parse(xhr.responseText);
+            if (data.success) {
+                window.log('成功上传并更新了 ' + data.uploaded_count + ' 个账单文件！', 'text-emerald-400');
+                document.getElementById('fileCount').innerText = '已成功接收 ' + data.uploaded_count + ' 个最新数据文件。';
+            } else {
+                window.log('上传失败: ' + data.error, 'text-rose-400');
+            }
+        }
+    };
+    xhr.send(formData);
+};
+
+window.parseAndPreviewHuawei = function() {
+    var text = document.getElementById('huaweiText').value;
+    if (!text.trim()) {
+        alert('请先在文本框里粘贴华为拉取的数据！');
+        return;
+    }
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/huawei/parse', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            var data = JSON.parse(xhr.responseText);
+            if (data.success) {
+                var tbody = document.getElementById('hwTableBody');
+                tbody.innerHTML = '';
+                for (var i = 0; i < data.results.length; i++) {
+                    var r = data.results[i];
+                    var isUnknown = r.email.indexOf('hid_') !== -1;
+                    var emailHtml = isUnknown 
+                        ? '<span class="text-rose-600 font-bold">' + r.email + ' (未绑定)</span>'
+                        : '<span class="text-emerald-700 font-medium">' + r.email + '</span>';
+
+                    var tr = document.createElement('tr');
+                    tr.innerHTML = '<td class="p-3 font-mono text-slate-500">' + r.hid + '</td>' +
+                        '<td class="p-3">' + emailHtml + '</td>' +
+                        '<td class="p-3 font-mono">$' + r.budget + '</td>' +
+                        '<td class="p-3 font-mono">' + r.rate_percent + '</td>' +
+                        '<td class="p-3 font-mono text-emerald-600 font-bold">$' + r.balance + '</td>' +
+                        '<td class="p-3"><span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-semibold">' + r.groupID + '</span></td>';
+                    tbody.appendChild(tr);
+                }
+
+                document.getElementById('hwParsedCount').innerText = '共筛出 ' + data.results.length + ' 条有效记录';
+                document.getElementById('huaweiPreviewArea').classList.remove('hidden');
+                window.log('华为数据解析完成！已剔除非客户标签和0余额数据，剩余 ' + data.results.length + ' 条真实有效记录。', 'text-orange-300');
+            } else {
+                window.log('解析失败: ' + data.error, 'text-rose-400');
+            }
+        }
+    };
+    xhr.send(JSON.stringify({ raw_text: text }));
+};
+
+window.triggerBroadcast = function() {
+    window.log('正在解析最新数据并生成全量 Telegram 报表...', 'text-yellow-400');
+    var huaweiRaw = document.getElementById('huaweiText').value;
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/broadcast', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            var data = JSON.parse(xhr.responseText);
+            if (data.success) {
+                window.log('播报完成！共成功推送了 ' + data.total_groups + ' 个群组。', 'text-emerald-400');
+                if (data.logs) {
+                    for (var i = 0; i < data.logs.length; i++) { window.log(data.logs[i]); }
+                }
+            } else {
+                window.log('播报失败: ' + data.error, 'text-rose-400');
+            }
+        }
+    };
+    xhr.send(JSON.stringify({ huawei_raw: huaweiRaw }));
+};
+
+window.stopBroadcast = function() {
+    window.log('正在向后台发送中断指令...', 'text-amber-400');
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/stop', true);
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            var data = JSON.parse(xhr.responseText);
+            window.log(data.message, 'text-amber-300');
+        }
+    };
+    xhr.send();
+};
+
+window.recallBroadcast = function() {
+    if (!confirm('确定要撤回刚才发送的所有 Telegram 消息吗？')) return;
+    window.log('正在请求后台物理撤回群组消息...', 'text-rose-300');
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/recall', true);
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            var data = JSON.parse(xhr.responseText);
+            if (data.success) {
+                window.log('撤回指令已下达！后台正在删除 ' + data.target_count + ' 条消息...', 'text-rose-400');
+            } else {
+                window.log('撤回失败: ' + data.error, 'text-rose-400');
+            }
+        }
+    };
+    xhr.send();
+};
+"""
+
+# ---------------------------------------------------------
+# HTML 模板视图
+# ---------------------------------------------------------
+HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -137,10 +514,11 @@ HTML_TEMPLATE = """
     <title>多云余额自动化管理控制台</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="/static/script.js"></script>
 </head>
 <body class="bg-slate-100 min-h-screen flex font-sans">
 
-    <!-- 侧边栏侧边导航 -->
+    <!-- 侧边栏导航 -->
     <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col min-h-screen p-4 flex-shrink-0 shadow-xl">
         <div class="px-3 py-4 border-b border-slate-800 mb-6 flex items-center gap-3">
             <div class="bg-indigo-600 p-2 rounded-lg text-white font-bold"><i class="fa-solid fa-cloud"></i></div>
@@ -157,6 +535,9 @@ HTML_TEMPLATE = """
             <button onclick="switchTab('huawei')" id="nav-huawei" class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition">
                 <i class="fa-solid fa-bolt text-orange-400 w-5"></i> 华为云专区
             </button>
+            <button onclick="switchTab('aws_gcp')" id="nav-aws_gcp" class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition">
+                <i class="fa-solid fa-server text-emerald-400 w-5"></i> AWS / GCP / Jeff 专区
+            </button>
             <button onclick="switchTab('dictionary')" id="nav-dictionary" class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition">
                 <i class="fa-solid fa-book w-5"></i> HID 映射字典
             </button>
@@ -170,7 +551,7 @@ HTML_TEMPLATE = """
         </div>
     </aside>
 
-    <!-- 右侧内容主区 -->
+    <!-- 主内容区 -->
     <main class="flex-1 p-8 overflow-y-auto">
 
         <!-- Tab 1: 播报控制台 -->
@@ -193,13 +574,13 @@ HTML_TEMPLATE = """
 
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <button id="sendBtn" onclick="triggerBroadcast()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 shadow-sm">
-                    🚀 一键全量播报
+                    一键全量播报
                 </button>
                 <button id="stopBtn" onclick="stopBroadcast()" class="bg-amber-500 hover:bg-amber-600 text-white font-medium py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 shadow-sm">
-                    ⏹️ 马上停止发送
+                    马上停止发送
                 </button>
                 <button id="recallBtn" onclick="recallBroadcast()" class="bg-rose-600 hover:bg-rose-700 text-white font-medium py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 shadow-sm">
-                    ↩️ 一键撤回已发消息
+                    一键撤回已发消息
                 </button>
             </div>
 
@@ -214,19 +595,19 @@ HTML_TEMPLATE = """
             <header class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center">
                 <div>
                     <h1 class="text-2xl font-bold text-slate-800">华为云数据专区</h1>
-                    <p class="text-sm text-slate-500 mt-1">全选粘贴华为拉取的整块多行表格数据，自动匹配字典并计算余额</p>
+                    <p class="text-sm text-slate-500 mt-1">粘贴华为原始文本，系统将自动清洗垃圾标签、智能计算余额</p>
                 </div>
                 <button onclick="parseAndPreviewHuawei()" class="bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition shadow">
-                    🔍 解析并预览华为数据
+                    解析并预览华为数据
                 </button>
             </header>
 
             <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-                <textarea id="huaweiText" rows="6" placeholder="请直接在此处粘贴华为页面全选拉取出的多行错位文本..." class="w-full p-4 border rounded-xl font-mono text-xs text-slate-700 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-slate-50/50"></textarea>
+                <textarea id="huaweiText" rows="6" placeholder="直接在此粘贴华为页面全选拉取的整块数据..." class="w-full p-4 border rounded-xl font-mono text-xs text-slate-700 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-slate-50/50"></textarea>
 
                 <div id="huaweiPreviewArea" class="hidden border rounded-xl bg-white overflow-hidden shadow-sm">
                     <div class="bg-orange-100 px-4 py-3 border-b flex justify-between items-center">
-                        <span class="text-xs font-bold text-orange-900">📊 华为云解析结果人工核查 (发前预览)</span>
+                        <span class="text-xs font-bold text-orange-900">华为云解析有效数据 (已过滤非客户标签与0余额记录)</span>
                         <span id="hwParsedCount" class="text-xs text-orange-700 font-medium"></span>
                     </div>
                     <div class="max-h-80 overflow-y-auto">
@@ -249,17 +630,55 @@ HTML_TEMPLATE = """
         </section>
 
 
-        <!-- Tab 3: HID 映射字典管理 -->
+        <!-- Tab 3: AWS / GCP / Jeff 专区 -->
+        <section id="tab-aws_gcp" class="hidden space-y-6">
+            <header class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center">
+                <div>
+                    <h1 class="text-2xl font-bold text-slate-800">AWS / GCP / Jeff 专区</h1>
+                    <p class="text-sm text-slate-500 mt-1">管理 AWS 和 GCP 账户的映射、授信额度与历史消费快照</p>
+                </div>
+                <div>
+                    <input type="file" id="awsGcpExcelInput" accept=".xlsx, .xls" class="hidden" onchange="uploadAwsGcpExcel(event)">
+                    <button onclick="document.getElementById('awsGcpExcelInput').click()" class="bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition shadow">
+                        📊 上传主配置表格 (AWS JEFF.xlsx)
+                    </button>
+                </div>
+            </header>
+
+            <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div class="p-4 border-b bg-slate-50 flex justify-between items-center">
+                    <span class="font-bold text-slate-700 text-sm">已导入的 AWS / GCP 账户授信与消费监控表</span>
+                </div>
+                <div class="max-h-96 overflow-y-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-100 text-slate-600 border-b">
+                            <tr>
+                                <th class="p-3">厂商</th>
+                                <th class="p-3">用户名 / 账号ID</th>
+                                <th class="p-3">映射邮箱</th>
+                                <th class="p-3">群编号</th>
+                                <th class="p-3">授信额度</th>
+                                <th class="p-3">往月累计消费</th>
+                                <th class="p-3">算得实时余额</th>
+                            </tr>
+                        </thead>
+                        <tbody id="awsGcpTableBody" class="divide-y"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+
+        <!-- Tab 4: HID 映射字典管理 -->
         <section id="tab-dictionary" class="hidden space-y-6">
             <header class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
                 <h1 class="text-2xl font-bold text-slate-800">华为 HID 邮箱字典管理</h1>
-                <p class="text-sm text-slate-500 mt-1">支持批量粘贴表格导入 HID 映射，永久保存在你的浏览器中</p>
+                <p class="text-sm text-slate-500 mt-1">从 Excel 复制两列批量粘贴导入 HID 映射，直接存入云端</p>
             </header>
 
-            <!-- 批量粘贴导入 -->
             <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-                <h3 class="font-bold text-slate-800 text-sm">📋 批量添加/导入 HID 映射 (从 Excel 复制两列粘贴):</h3>
-                <textarea id="batchDictText" rows="6" placeholder="例如:&#10;hid_4qx0z3vpw753w-x    4epdohna@anyrelax.fun&#10;hid_php7e3sdtrt6n6uy    psutgjdr@anyrelax.fun" class="w-full p-3 border rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-none bg-slate-50/50"></textarea>
+                <h3 class="font-bold text-slate-800 text-sm">批量添加/导入 HID 映射 (从 Excel 复制两列直接粘贴):</h3>
+                <textarea id="batchDictText" rows="6" placeholder="在这里直接粘贴包含 HID 和 邮箱 的两列数据..." class="w-full p-3 border rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-none bg-slate-50/50"></textarea>
                 <div class="flex justify-end">
                     <button onclick="importBatchDict()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium px-5 py-2.5 rounded-lg transition shadow">
                         批量保存映射
@@ -267,7 +686,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- 当前字典列表 -->
             <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                 <div class="p-4 border-b bg-slate-50 flex justify-between items-center">
                     <span class="font-bold text-slate-700 text-sm">已生效的 HID 映射字典列表</span>
@@ -289,233 +707,24 @@ HTML_TEMPLATE = """
         </section>
 
     </main>
-
-    <script>
-        function getLocalDict() {
-            try {
-                return JSON.parse(localStorage.getItem('huawei_hid_dict')) || {};
-            } catch {
-                return {};
-            }
-        }
-
-        function saveLocalDict(dict) {
-            localStorage.setItem('huawei_hid_dict', JSON.stringify(dict));
-            renderDictTable();
-        }
-
-        function switchTab(tabName) {
-            ['dashboard', 'huawei', 'dictionary'].forEach(t => {
-                document.getElementById(`tab-${t}`).classList.add('hidden');
-                const btn = document.getElementById(`nav-${t}`);
-                btn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition";
-            });
-
-            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
-            const activeBtn = document.getElementById(`nav-${tabName}`);
-            activeBtn.className = "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-indigo-600 text-white transition";
-
-            if (tabName === 'dictionary') renderDictTable();
-        }
-
-        function log(msg, color='text-slate-200') {
-            const box = document.getElementById('logBox');
-            box.innerHTML += `<p class="${color} mt-1">> ${msg}</p>`;
-            box.scrollTop = box.scrollHeight;
-        }
-
-        function renderDictTable() {
-            const dict = getLocalDict();
-            const tbody = document.getElementById('dictTableBody');
-            tbody.innerHTML = '';
-            const keys = Object.keys(dict);
-
-            if (keys.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-slate-400">暂无任何 HID 映射，请在上方粘贴批量导入！</td></tr>`;
-                return;
-            }
-
-            keys.forEach(k => {
-                tbody.innerHTML += `
-                    <tr>
-                        <td class="p-3 font-mono text-slate-600">${k}</td>
-                        <td class="p-3 font-medium text-emerald-700">${dict[k]}</td>
-                        <td class="p-3 text-right">
-                            <button onclick="deleteDictKey('${k}')" class="text-rose-500 hover:text-rose-700"><i class="fa-solid fa-trash"></i></button>
-                        </td>
-                    </tr>
-                `;
-            });
-        }
-
-        function importBatchDict() {
-            const text = document.getElementById('batchDictText').value;
-            if (!text || !text.trim()) return alert('请先粘贴包含 HID 和 邮箱 的表格数据！');
-
-            const dict = getLocalDict();
-            let count = 0;
-            const lines = text.trim().split(/\\r?\\n/);
-
-            lines.forEach(line => {
-                const parts = line.trim().split(/\\s+/);
-                if (parts.length >= 2) {
-                    const possibleHid = parts[0].trim();
-                    const possibleEmail = parts[1].trim();
-                    if (possibleHid.includes('hid_')) {
-                        dict[possibleHid] = possibleEmail;
-                        count++;
-                    }
-                }
-            });
-
-            saveLocalDict(dict);
-            document.getElementById('batchDictText').value = '';
-            alert(`🎉 成功批量保存了 ${count} 条 HID 映射字典！`);
-        }
-
-        function deleteDictKey(key) {
-            const dict = getLocalDict();
-            delete dict[key];
-            saveLocalDict(dict);
-        }
-
-        function clearAllDict() {
-            if (confirm('确认清空所有 HID 映射词典吗？')) {
-                localStorage.removeItem('huawei_hid_dict');
-                renderDictTable();
-            }
-        }
-
-        async function handleFileSelect(event) {
-            const files = event.target.files;
-            if (files.length === 0) return;
-
-            document.getElementById('fileCount').innerText = `已选择 ${files.length} 个文件，正在上传...`;
-            const formData = new FormData();
-            for (let i = 0; i < files.length; i++) {
-                formData.append('files', files[i]);
-            }
-
-            try {
-                const res = await fetch('/api/upload', { method: 'POST', body: formData });
-                const data = await res.json();
-                if (data.success) {
-                    log(`✅ 成功上传并更新了 ${data.uploaded_count} 个账单文件！`, 'text-emerald-400');
-                    document.getElementById('fileCount').innerText = `已成功接收 ${data.uploaded_count} 个最新数据文件。`;
-                } else {
-                    log(`❌ 上传失败: ${data.error}`, 'text-rose-400');
-                }
-            } catch (err) {
-                log(`❌ 上传异常: ${err.message}`, 'text-rose-400');
-            }
-        }
-
-        async function parseAndPreviewHuawei() {
-            const text = document.getElementById('huaweiText').value;
-            if (!text.trim()) {
-                alert('请先在文本框里粘贴华为拉取的数据！');
-                return;
-            }
-
-            const localDict = getLocalDict();
-
-            try {
-                const res = await fetch('/api/huawei/parse', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ raw_text: text, hw_dict: localDict })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    const tbody = document.getElementById('hwTableBody');
-                    tbody.innerHTML = '';
-                    data.results.forEach(r => {
-                        const isUnknown = r.email.startsWith('hid_');
-                        const emailHtml = isUnknown 
-                            ? `<span class="text-rose-600 font-bold">${r.email} (未绑定)</span>`
-                            : `<span class="text-emerald-700 font-medium">${r.email}</span>`;
-
-                        tbody.innerHTML += `
-                            <tr>
-                                <td class="p-3 font-mono text-slate-500">${r.hid}</td>
-                                <td class="p-3">${emailHtml}</td>
-                                <td class="p-3 font-mono">$${r.budget}</td>
-                                <td class="p-3 font-mono">${r.rate_percent}</td>
-                                <td class="p-3 font-mono text-emerald-600 font-bold">$${r.balance}</td>
-                                <td class="p-3"><span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-semibold">${r.groupID}</span></td>
-                            </tr>
-                        `;
-                    });
-
-                    document.getElementById('hwParsedCount').innerText = `识别出 ${data.results.length} 条记录`;
-                    document.getElementById('huaweiPreviewArea').classList.remove('hidden');
-                    log(`✅ 华为数据解析完成！已生成下方 ${data.results.length} 条预览表格供核对。`, 'text-orange-300');
-                } else {
-                    log(`❌ 解析失败: ${data.error}`, 'text-rose-400');
-                }
-            } catch (err) {
-                log(`❌ 请求异常: ${err.message}`, 'text-rose-400');
-            }
-        }
-
-        async function triggerBroadcast() {
-            log('正在解析最新数据并生成全量 Telegram 报表...', 'text-yellow-400');
-            const huaweiRaw = document.getElementById('huaweiText').value;
-            const localDict = getLocalDict();
-
-            try {
-                const res = await fetch('/api/broadcast', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ huawei_raw: huaweiRaw, hw_dict: localDict })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    log(`🎉 播报完成！共成功推送了 ${data.total_groups} 个群组。`, 'text-emerald-400');
-                    data.logs.forEach(l => log(l));
-                } else {
-                    log(`❌ 播报失败: ${data.error}`, 'text-rose-400');
-                }
-            } catch (err) {
-                log(`❌ 请求异常: ${err.message}`, 'text-rose-400');
-            }
-        }
-
-        async function stopBroadcast() {
-            log('⚠️ 正在向后台发送中断指令...', 'text-amber-400');
-            try {
-                const res = await fetch('/api/stop', { method: 'POST' });
-                const data = await res.json();
-                log(data.message, 'text-amber-300');
-            } catch (err) {
-                log(`❌ 停止请求失败: ${err.message}`, 'text-rose-400');
-            }
-        }
-
-        async function recallBroadcast() {
-            if (!confirm('确定要撤回刚才发送的所有 Telegram 消息吗？')) return;
-            log('🔄 正在请求后台物理撤回群组消息...', 'text-rose-300');
-            try {
-                const res = await fetch('/api/recall', { method: 'POST' });
-                const data = await res.json();
-                if (data.success) {
-                    log(`🚀 撤回指令已下达！后台正在删除 ${data.target_count} 条消息...`, 'text-emerald-400');
-                } else {
-                    log(`❌ 撤回失败: ${data.error}`, 'text-rose-400');
-                }
-            } catch (err) {
-                log(`❌ 撤回异常: ${err.message}`, 'text-rose-400');
-            }
-        }
-    </script>
 </body>
 </html>
 """
 
 
+# ---------------------------------------------------------
+# Flask API 路由
+# ---------------------------------------------------------
 @app.route("/")
 def index():
     return render_template_string(HTML_TEMPLATE)
+
+
+@app.route("/static/script.js")
+def serve_script():
+    response = make_response(PURE_JS)
+    response.headers["Content-Type"] = "application/javascript; charset=utf-8"
+    return response
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -533,12 +742,135 @@ def upload_files():
         return jsonify({"success": False, "error": str(e)})
 
 
+@app.route("/api/aws_gcp/dict/upload", methods=["POST"])
+def upload_aws_gcp_dict_excel():
+    try:
+        if "file" not in request.files:
+            return jsonify({"success": False, "error": "未收到文件"})
+        file = request.files["file"]
+        if not file.filename:
+            return jsonify({"success": False, "error": "文件名为空"})
+
+        df = pd.read_excel(file)
+        aws_gcp_dict = load_aws_gcp_dict()
+
+        month_cols = [c for c in df.columns if "月消费" in str(c)]
+        count = 0
+
+        for _, row in df.iterrows():
+            account_id = (
+                str(row.get("用户名", "")).strip()
+                if pd.notna(row.get("用户名"))
+                else ""
+            )
+            email = (
+                str(row.get("账户邮箱", "")).strip()
+                if pd.notna(row.get("账户邮箱"))
+                else ""
+            )
+
+            if account_id and account_id != "nan":
+                credit = clean_num(row.get("授信", 0))
+
+                past_consumption = 0.0
+                if month_cols:
+                    past_consumption = sum(
+                        [clean_num(row.get(mc, 0)) for mc in month_cols]
+                    )
+
+                balance = credit - past_consumption
+
+                aws_gcp_dict[account_id] = {
+                    "vendor": str(row.get("归属厂商", "")).strip(),
+                    "email": email,
+                    "group_id": str(row.get("群编号", "")).strip(),
+                    "group_name": str(row.get("群组", "")).strip(),
+                    "credit": round(credit, 2),
+                    "past_consumption": round(past_consumption, 2),
+                    "balance": round(balance, 2),
+                }
+                count += 1
+
+        save_aws_gcp_dict(aws_gcp_dict)
+
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        save_daily_snapshot(today_str, aws_gcp_dict)
+
+        return jsonify(
+            {"success": True, "count": count, "dict": aws_gcp_dict}
+        )
+    except Exception as e:
+        err = traceback.format_exc()
+        print(err)
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/aws_gcp/dict/list", methods=["GET"])
+def aws_gcp_dict_list():
+    return jsonify({"success": True, "dict": load_aws_gcp_dict()})
+
+
+@app.route("/api/huawei/dict/list", methods=["GET"])
+def huawei_dict_list():
+    return jsonify({"success": True, "dict": load_huawei_dict()})
+
+
+@app.route("/api/huawei/dict/import", methods=["POST"])
+def huawei_dict_import_api():
+    try:
+        data = request.json or {}
+        raw_text = data.get("raw_text", "")
+        lines = raw_text.strip().split("\n")
+
+        current_dict = load_huawei_dict()
+        added_count = 0
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str:
+                continue
+            parts = re.split(r"[\s,\t]+", line_str)
+            if len(parts) >= 2:
+                hid_cand = parts[0].strip()
+                email_cand = parts[1].strip()
+                if "hid_" in hid_cand:
+                    current_dict[hid_cand] = email_cand
+                    added_count += 1
+
+        save_huawei_dict(current_dict)
+        return jsonify(
+            {"success": True, "count": added_count, "dict": current_dict}
+        )
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/huawei/dict/delete", methods=["POST"])
+def huawei_dict_delete_api():
+    try:
+        data = request.json or {}
+        key = data.get("key", "").strip()
+        current_dict = load_huawei_dict()
+        if key in current_dict:
+            del current_dict[key]
+            save_huawei_dict(current_dict)
+        return jsonify({"success": True, "dict": current_dict})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/huawei/dict/clear", methods=["POST"])
+def huawei_dict_clear_api():
+    save_huawei_dict({})
+    return jsonify({"success": True})
+
+
 @app.route("/api/huawei/parse", methods=["POST"])
 def huawei_parse_api():
     try:
         data = request.json or {}
         raw_text = data.get("raw_text", "")
-        hw_dict = data.get("hw_dict", {})
+        hw_dict = load_huawei_dict()
         results = parse_huawei_multiline_text(raw_text, hw_dict)
         return jsonify({"success": True, "results": results})
     except Exception as e:
@@ -576,7 +908,7 @@ def recall_api():
         return jsonify(
             {
                 "success": False,
-                "error": "没有找到可撤回的消息记录（可能尚未播报，或已经撤回过了）。",
+                "error": "没有找到可撤回的消息记录。",
             }
         )
 
@@ -598,7 +930,7 @@ def broadcast_api():
     try:
         req_data = request.json or {}
         huawei_raw_text = req_data.get("huawei_raw", "")
-        hw_dict = req_data.get("hw_dict", {})
+        hw_dict = load_huawei_dict()
 
         all_data = []
         group_map = {}
@@ -606,7 +938,7 @@ def broadcast_api():
         if huawei_raw_text.strip():
             hw_results = parse_huawei_multiline_text(huawei_raw_text, hw_dict)
             for r in hw_results:
-                if r["groupID"] != "未识别" and r["balance"] > 0:
+                if r["groupID"] and r["balance"] > 0:
                     all_data.append(
                         {
                             "account": r["email"],
