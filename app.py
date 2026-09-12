@@ -28,7 +28,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
 # ---------------------------------------------------------
-# 持久化工具：保证字典永久保存在服务器 JSON 文件里
+# 持久化工具：保证字典与历史记录永久保存在文件里
 # ---------------------------------------------------------
 def load_huawei_dict():
     if os.path.exists(HUAWEI_DICT_FILE):
@@ -87,6 +87,7 @@ def parse_tag(tag_str):
         return None
     s = str(tag_str).strip()
 
+    # 自动过滤垃圾无用标签
     invalid_keywords = ["自定义标签", "测试", "hid", "添加", "设置预算"]
     if any(k in s for k in invalid_keywords):
         return None
@@ -202,7 +203,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         function loadServerDict() {
             var xhr = new XMLHttpRequest();
-            xhr.open("GET", "/api/huawei/dict/list", true);
+            xhr.open('GET', '/api/huawei/dict/list', true);
             xhr.onload = function() {
                 if (xhr.status === 200) {
                     var data = JSON.parse(xhr.responseText);
@@ -243,8 +244,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
 
             var xhr = new XMLHttpRequest();
-            xhr.open("POST", "/api/huawei/dict/import", true);
-            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.open('POST', '/api/huawei/dict/import', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
             xhr.onload = function() {
                 if (xhr.status === 200) {
                     var data = JSON.parse(xhr.responseText);
@@ -262,8 +263,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         function deleteDictKey(key) {
             var xhr = new XMLHttpRequest();
-            xhr.open("POST", "/api/huawei/dict/delete", true);
-            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.open('POST', '/api/huawei/dict/delete', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
             xhr.onload = function() {
                 if (xhr.status === 200) {
                     var data = JSON.parse(xhr.responseText);
@@ -276,7 +277,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function clearAllDict() {
             if (confirm('确认清空所有 HID 映射词典吗？')) {
                 var xhr = new XMLHttpRequest();
-                xhr.open("POST", "/api/huawei/dict/clear", true);
+                xhr.open('POST', '/api/huawei/dict/clear', true);
                 xhr.onload = function() {
                     if (xhr.status === 200) {
                         var data = JSON.parse(xhr.responseText);
@@ -298,7 +299,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
 
             var xhr = new XMLHttpRequest();
-            xhr.open("POST", "/api/upload", true);
+            xhr.open('POST', '/api/upload', true);
             xhr.onload = function() {
                 if (xhr.status === 200) {
                     var data = JSON.parse(xhr.responseText);
@@ -321,8 +322,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
 
             var xhr = new XMLHttpRequest();
-            xhr.open("POST", "/api/huawei/parse", true);
-            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.open('POST', '/api/huawei/parse', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
             xhr.onload = function() {
                 if (xhr.status === 200) {
                     var data = JSON.parse(xhr.responseText);
@@ -362,8 +363,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             var huaweiRaw = document.getElementById('huaweiText').value;
 
             var xhr = new XMLHttpRequest();
-            xhr.open("POST", "/api/broadcast", true);
-            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.open('POST', '/api/broadcast', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
             xhr.onload = function() {
                 if (xhr.status === 200) {
                     var data = JSON.parse(xhr.responseText);
@@ -383,7 +384,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function stopBroadcast() {
             log('⚠️ 正在向后台发送中断指令...', 'text-amber-400');
             var xhr = new XMLHttpRequest();
-            xhr.open("POST", "/api/stop", true);
+            xhr.open('POST', '/api/stop', true);
             xhr.onload = function() {
                 if (xhr.status === 200) {
                     var data = JSON.parse(xhr.responseText);
@@ -397,7 +398,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (!confirm('确定要撤回刚才发送的所有 Telegram 消息吗？')) return;
             log('🔄 正在请求后台物理撤回群组消息...', 'text-rose-300');
             var xhr = new XMLHttpRequest();
-            xhr.open("POST", "/api/recall", true);
+            xhr.open('POST', '/api/recall', true);
             xhr.onload = function() {
                 if (xhr.status === 200) {
                     var data = JSON.parse(xhr.responseText);
@@ -532,7 +533,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
             <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
                 <h3 class="font-bold text-slate-800 text-sm">📋 批量添加/导入 HID 映射 (从 Excel 复制两列直接粘贴):</h3>
-                <textarea id="batchDictText" rows="6" placeholder="例如:&#10;hid_u2oi0snvj10umpe    o3enur4yljlzp@anyrelax.fun&#10;hid_gequmxnuply07xe    4w23ax4aohp2@anyrelax.fun" class="w-full p-3 border rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-none bg-slate-50/50"></textarea>
+                <textarea id="batchDictText" rows="6" placeholder="在这里直接粘贴包含 HID 和 邮箱 的两列数据..." class="w-full p-3 border rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-none bg-slate-50/50"></textarea>
                 <div class="flex justify-end">
                     <button onclick="importBatchDict()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium px-5 py-2.5 rounded-lg transition shadow">
                         批量保存映射
